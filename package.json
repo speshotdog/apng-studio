@@ -1,0 +1,43 @@
+{
+  "name": "apng-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "dist": "electron-vite build && electron-builder --win",
+    "format": "prettier --write src scripts *.ts *.json *.yml",
+    "format:check": "prettier --check src scripts",
+    "postinstall": "node node_modules/electron/install.js",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsx scripts/verify-clip.ts",
+    "verify:codec": "tsx scripts/verify-codec.ts",
+    "verify:all": "npm run verify && npm run verify:codec",
+    "smoke": "electron-vite build && node scripts/build-smoke.mjs && prettier --write scripts/smoke.js && electron scripts/smoke.js",
+    "verify:full": "npm run verify:all && npm run smoke",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs"
+  },
+  "dependencies": {
+    "gifenc": "^1.0.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.14.2",
+    "upng-js": "^2.1.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.1"
+  }
+}

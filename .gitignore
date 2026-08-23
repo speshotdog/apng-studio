@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+release/
+
+# 委託人的原稿與由它產生的比對基準圖，不公開
+assets/samples/
+assets/golden/
+
+# 畫面截圖含委託人原創角色，暫不公開
+docs/

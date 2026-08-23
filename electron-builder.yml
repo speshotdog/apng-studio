@@ -1,0 +1,14 @@
+appId: com.apngstudio.app
+productName: APNG Studio
+artifactName: APNG-Studio-${version}-portable.${ext}
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+win:
+  target:
+    - portable
+    - nsis
+nsis:
+  artifactName: APNG-Studio-${version}-setup.${ext}
