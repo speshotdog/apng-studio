@@ -25,8 +25,9 @@ export function ProjectPanel(): React.JSX.Element {
     const timer = setInterval(() => {
       const state = useStore.getState()
       if (!state.dirty || !state.project) return
+      const target = state.project.id
       void window.api
-        .autosaveProject(state.project.id, captureBlob())
+        .autosaveProject(target, captureBlob())
         .catch((error: unknown) => console.warn(`自動存檔失敗：${String(error)}`))
     }, AUTOSAVE_INTERVAL_MS)
     return () => clearInterval(timer)

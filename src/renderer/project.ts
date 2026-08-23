@@ -82,8 +82,11 @@ export async function applyBlob(blob: ProjectBlob): Promise<void> {
 export async function saveCurrentProject(): Promise<boolean> {
   const state = useStore.getState()
   if (!state.project) return false
+  const savingId = state.project.id
   try {
-    const meta = await window.api.saveProject(state.project.id, captureBlob(), thumbnail())
+    const meta = await window.api.saveProject(savingId, captureBlob(), thumbnail())
+    // 存檔期間使用者可能已經切到別的專案；慢一步回來的結果不可以蓋掉現在這一份。
+    if (useStore.getState().project?.id !== savingId) return true
     useStore.getState().set({ project: meta, dirty: false })
     state.toast('success', `已儲存「${meta.name}」`)
     return true

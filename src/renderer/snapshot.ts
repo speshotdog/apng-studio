@@ -78,14 +78,19 @@ export function applyEditorState(stored: EditorState): void {
   const state = useStore.getState()
   const fallback = fallbackSource(stored)
   const sources = stored.sources?.length ? stored.sources : fallback ? [fallback] : state.sources
-  const activeSourceId =
-    stored.activeSourceId && sources.some((source) => source.id === stored.activeSourceId)
-      ? stored.activeSourceId
-      : (fallback?.id ?? sources[0]?.id ?? null)
   const docs =
     fallback && state.doc && !state.docs[fallback.id]
       ? { ...state.docs, [fallback.id]: state.doc }
       : state.docs
+  // active 一定要挑「真的載得起來」的那一個。只檢查 sources 的話，
+  // 上次用的素材剛好不見時整個編輯器會停在 doc=null，連匯出都會說「請先開啟檔案」，
+  // 即使其他素材都好好的。
+  const loadable = (id: string | null | undefined): boolean => Boolean(id && docs[id])
+  const activeSourceId = loadable(stored.activeSourceId)
+    ? stored.activeSourceId!
+    : loadable(fallback?.id)
+      ? fallback!.id
+      : (sources.find((source) => docs[source.id])?.id ?? sources[0]?.id ?? null)
 
   useStore.getState().set({
     sources,

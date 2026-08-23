@@ -2,3 +2,4 @@ scripts/smoke.js
 out/
 release/
 node_modules/
+scripts/try-giphy.js

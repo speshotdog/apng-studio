@@ -194,7 +194,12 @@ const DIRTY_KEYS: ReadonlyArray<keyof State> = [
   'gifColors',
   'staticFrame',
   'packCells',
+  'packTarget',
+  'packCount',
+  'lockAspect',
   'visibility',
+  'sources',
+  'activeSourceId',
 ]
 
 const makeInitial = () => ({
@@ -341,6 +346,14 @@ export const useStore = create<State>((set, get) => ({
       trimmed: Object.fromEntries(
         Object.entries(state.trimmed).map(([id, slots]) => [id, slots.map(clearSlot)]),
       ),
+      // 貼圖組已經產生的 PNG 留著，但「點回去編輯」的連結要拿掉 ——
+      // 素材都沒了，點下去只會找不到來源。
+      packCells: state.packCells.map((cell) =>
+        cell.editor?.sourceId === sourceId ? { ...cell, editor: undefined } : cell,
+      ),
+      // undo 快照不含素材庫，留著會讓人復原到「影格指向已刪素材」的壞狀態。
+      past: [],
+      future: [],
       selection: [],
       playing: false,
       dirty: true,
@@ -527,17 +540,31 @@ export const useStore = create<State>((set, get) => ({
           : node.children.map(visit).find((child) => child !== undefined)
       return visit(doc.tree)
     })()
-    const byName = new Map(folder?.children.map((child) => [child.name, child.id]) ?? [])
+    // cel 只能靠名稱對應（CSP 沒有給我們穩定的 cel id），所以同名一定要講出來，
+    // 不然使用者會拿到「看起來有帶入、但對到錯的圖層」這種最難查的結果。
+    const byName = new Map<string, number>()
+    const duplicated = new Set<string>()
+    for (const child of folder?.children ?? []) {
+      if (byName.has(child.name)) duplicated.add(child.name)
+      else byName.set(child.name, child.id)
+    }
     const slots = Array.from({ length: timeline.frameCount }, emptySlot)
     const missing = new Set<string>()
+    let outOfRange = 0
     for (const key of timeline.keys) {
       const layerId = byName.get(key.celName)
-      if (key.frame < 0 || key.frame >= slots.length) continue
+      if (key.frame < 0 || key.frame >= slots.length) {
+        outOfRange += 1
+        continue
+      }
       if (layerId === undefined) missing.add(key.celName)
       else slots[key.frame] = { sourceId, layerId }
     }
     const warnings = [...timeline.warnings]
-    if (missing.size) warnings.push(`Missing cels: ${[...missing].join(', ')}`)
+    if (missing.size) warnings.push(`找不到這些 cel：${[...missing].join('、')}`)
+    if (duplicated.size)
+      warnings.push(`有同名的 cel（${[...duplicated].join('、')}），只會用到第一個，請在 CSP 改名`)
+    if (outOfRange) warnings.push(`有 ${outOfRange} 個關鍵影格超出這條時間軸的長度，已忽略`)
     state.commit()
     set({
       tracks: state.tracks.map((track, index) =>
@@ -559,9 +586,8 @@ export const useStore = create<State>((set, get) => ({
     })
     state.toast(
       warnings.length ? 'info' : 'success',
-      `Imported CSP timeline: ${timeline.frameCount} frames @ ${timeline.frameRate} FPS${
-        warnings.length ? ` (${warnings.join('; ')})` : ''
-      }`,
+      `已帶入 CSP 時間軸：${timeline.frameCount} 格 @ ${timeline.frameRate} FPS，` +
+        `${timeline.keys.length} 個關鍵影格${warnings.length ? `；${warnings.join('；')}` : ''}`,
     )
   },
 }))

@@ -37,14 +37,19 @@ export async function ensureBitmap(sourceId: string, layerId: number): Promise<I
   const cached = state.bitmaps.get(key)
   if (cached) return cached
   const source = state.sourceOf(sourceId)
-  if (!source) throw new Error(`Source not found: ${sourceId}`)
+  if (!source) throw new Error(`找不到來源素材：${sourceId}`)
   const value = await window.api.renderLayer(
     source.path,
     layerId,
     sourceOverrides(sourceId, state.visibility),
   )
   const bitmap = await createImageBitmap(bitmapToImageData(value.rgba, value.width, value.height))
-  useStore.getState().setBitmap(key, bitmap)
+  // 解碼是非同步的，這段時間內使用者可能已經把這個素材移除或重新連結到別的檔案。
+  // 沒有這道檢查的話，慢一步回來的舊圖會被寫回快取，預覽就會顯示上一個檔案的內容。
+  const after = useStore.getState()
+  const stillSame = after.sourceOf(sourceId)?.path === source.path
+  if (!stillSame || bitmapKey(sourceId, layerId, after.visibility) !== key) return bitmap
+  after.setBitmap(key, bitmap)
   return bitmap
 }
 

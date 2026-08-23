@@ -56,6 +56,7 @@ function Row({
   const [open, setOpen] = useState(depth < 2)
   const visibility = useStore((state) => state.visibility)
   const set = useStore((state) => state.set)
+  const commit = useStore((state) => state.commit)
   const key = layerVisibilityKey(sourceId, node.id)
   const visible = visibility.get(key) ?? node.visible
   return (
@@ -78,6 +79,8 @@ function Row({
           type="checkbox"
           checked={visible}
           onChange={() => {
+            // 可見性有進 EditSnapshot，改之前要留一份快照，Ctrl+Z 才會只退這一步。
+            commit()
             const next = new Map(visibility)
             next.set(key, !visible)
             set({ visibility: next })

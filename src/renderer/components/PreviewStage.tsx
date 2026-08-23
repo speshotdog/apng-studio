@@ -7,16 +7,21 @@ export function PreviewStage(): React.JSX.Element {
   const { doc, playhead, fps, playing, previewLoop, exportWidth, exportHeight, scaleMode, set } =
     state
   const frames = state.frameCount()
+  // 解圖是非同步的，快速切格或切素材時舊的那次可能比新的還晚回來。
+  // 用一個遞增序號當令牌，回來時發現已經不是最新的請求就不要畫。
+  const drawToken = useRef(0)
   const draw = async (index: number): Promise<void> => {
     const canvas = canvasRef.current
     if (!canvas || !doc) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const token = ++drawToken.current
     await Promise.all(
       frameLayerIds(index).map((slot) =>
         ensureBitmap(slot.sourceId, slot.layerId).catch(() => undefined),
       ),
     )
+    if (token !== drawToken.current) return
     drawFrame(ctx, index, canvas.width, canvas.height, scaleMode)
   }
   useEffect(() => {
