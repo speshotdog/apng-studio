@@ -29865,12 +29865,16 @@ async function attempt(label, gifBytes, key, username, keyInQuery) {
 async function run() {
   const argument = process.argv.slice(2).find((value) => !value.startsWith("-"));
   const sourcePath = argument ? resolve(argument) : resolve(import.meta.dirname, "..", "assets", "samples", "11.clip");
-  const key = await getGiphyKey();
+  const fromEnvironment = (process.env.GIPHY_API_KEY ?? "").trim();
+  const key = fromEnvironment || await getGiphyKey();
   const settings = await getPublicSettings();
   console.log(`\u8A2D\u5B9A\u6A94\u4F4D\u7F6E\uFF1A${app2.getPath("userData")}`);
+  console.log(`\u91D1\u9470\u4F86\u6E90\uFF1A${fromEnvironment ? "\u74B0\u5883\u8B8A\u6578 GIPHY_API_KEY" : "\u7A0B\u5F0F\u8A2D\u5B9A\u6A94"}`);
   console.log(`\u91D1\u9470\uFF1A${mask(key)}\u3000\u4F7F\u7528\u8005\u540D\u7A31\uFF1A${settings.giphyUsername || "(\u672A\u8A2D\u5B9A)"}`);
   if (!key) {
-    console.log("\n\u6C92\u6709\u627E\u5230\u5DF2\u5132\u5B58\u7684 GIPHY \u91D1\u9470\u3002\u8ACB\u5148\u5728\u7A0B\u5F0F\u7684\u300C\u8A2D\u5B9A\u300D\u586B\u5165 API Key \u4E26\u6309\u5132\u5B58\u3002");
+    console.log(
+      "\n\u627E\u4E0D\u5230 GIPHY \u91D1\u9470\u3002\u5169\u7A2E\u505A\u6CD5\uFF1A\n  A. \u5728\u7A0B\u5F0F\u7684\u300C\u8A2D\u5B9A\u300D\u586B\u5165 API Key \u6309\u5132\u5B58\uFF0C\u518D\u8DD1\u4E00\u6B21\u9019\u500B\u6307\u4EE4\n  B. \u76F4\u63A5\u7528\u74B0\u5883\u8B8A\u6578\uFF1AGIPHY_API_KEY=\u4F60\u7684\u91D1\u9470 npm run try:giphy"
+    );
     app2.exit(2);
     return;
   }

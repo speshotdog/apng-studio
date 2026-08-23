@@ -10,18 +10,21 @@ type FetchLike = typeof fetch
 const UPLOAD_URL = 'https://upload.giphy.com/v1/gifs'
 const API_ROOT = 'https://api.giphy.com/v1/gifs'
 
-function failure(status: number, message: string): GiphyUploadResult {
+function failure(status: number, message: string, username = ''): GiphyUploadResult {
   if (status === 429 || /rate\s*limit/i.test(message))
     return { ok: false, error: '已達上傳額度；beta key 每天上限 10 次' }
-  // 光印「Unauthorized」對使用者毫無幫助 —— GIPHY 的一般 API key 預設只能讀，
-  // 上傳要另外申請權限，這是這個 401 最常見的原因。
+  // GIPHY 只回一句「Unauthorized」，但實測下來最常見的原因是**使用者名稱填錯**：
+  // 送出的 username 必須是這把金鑰own 得到的頻道，隨便填一個不存在的就會 401，
+  // 金鑰本身完全正常。所以有填 username 時要先怪它，不要叫人家去重申請金鑰。
   if (status === 401 || status === 403)
     return {
       ok: false,
-      error:
-        '金鑰被 GIPHY 拒絕（Unauthorized）。GIPHY 的一般 API key 預設只能「讀取」，' +
-        '要上傳必須到 developers.giphy.com 幫這個 app 申請上傳權限，' +
-        '或改用有上傳權限的 production key。（也請確認金鑰沒有複製到多餘空白）',
+      error: username
+        ? `GIPHY 拒絕了這次上傳（Unauthorized）。最可能是設定裡的使用者名稱「${username}」` +
+          '不是這把金鑰擁有的 GIPHY 頻道 —— 把它清空再試一次通常就會過。' +
+          '（若清空後仍失敗，才需要確認金鑰有沒有上傳權限）'
+        : 'GIPHY 拒絕了這次上傳（Unauthorized）。請確認金鑰沒有複製到多餘空白，' +
+          '以及這把金鑰在 developers.giphy.com 上有上傳權限。',
     }
   return { ok: false, error: message || `GIPHY 回傳錯誤（HTTP ${status}）` }
 }
@@ -67,10 +70,10 @@ export async function uploadToGiphy(
     if (uploaded.status === 401 || uploaded.status === 403)
       uploaded = await post(`${UPLOAD_URL}?api_key=${encodeURIComponent(key)}`)
     const uploadBody = await json(uploaded)
-    if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? '')
+    if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? '', username.trim())
     // HTTP 200 但 meta.status 是 4xx 的情況也要當失敗，否則會卡在「缺少圖片 ID」。
     if (typeof uploadBody.meta?.status === 'number' && uploadBody.meta.status >= 400)
-      return failure(uploadBody.meta.status, uploadBody.meta.msg ?? '')
+      return failure(uploadBody.meta.status, uploadBody.meta.msg ?? '', username.trim())
     const id = uploadBody.data?.id
     if (typeof id !== 'string' || !id)
       return {

@@ -143,19 +143,36 @@ async function retriesWithQueryOn401(): Promise<void> {
   console.log('✓ 401 時會自動改用帶 query 的送法重試')
 }
 
-/** 401 的錯誤訊息要講得出「該去做什麼」，不能只回一句 Unauthorized。 */
+/**
+ * 401 的錯誤訊息要講得出「該去做什麼」。
+ * 實測證實：填了不屬於自己的 username 就會 401，金鑰完全正常 ——
+ * 所以有 username 時訊息必須先指向它，不能叫人家去重新申請金鑰。
+ */
 async function unauthorizedMessageIsActionable(): Promise<void> {
-  const result = await uploadToGiphy(
-    gifBytes,
-    '',
-    'k',
-    '',
-    async () =>
-      new Response(JSON.stringify({ meta: { status: 401, msg: 'Unauthorized' } }), { status: 401 }),
+  const deny: typeof fetch = async () =>
+    new Response(JSON.stringify({ meta: { status: 401, msg: 'Unauthorized' } }), { status: 401 })
+
+  const withUsername = await uploadToGiphy(gifBytes, '', 'k', 'someone-elses-channel', deny)
+  assert.equal(withUsername.ok, false)
+  assert.match(
+    withUsername.error ?? '',
+    /someone-elses-channel/,
+    '有填使用者名稱時，401 訊息必須指出是哪個名稱有問題',
   )
-  assert.equal(result.ok, false)
-  assert.match(result.error ?? '', /上傳權限|developers\.giphy\.com/, '401 訊息沒有給出處理方式')
-  console.log(`✓ 401 訊息可操作：「${result.error?.slice(0, 40)}…」`)
+  // 使用者名稱要是「先講」的那個原因，金鑰權限只能當備註排在後面。
+  const error = withUsername.error ?? ''
+  assert.ok(
+    error.indexOf('someone-elses-channel') < error.indexOf('上傳權限'),
+    '使用者名稱必須排在金鑰權限之前，否則會把人導去錯的地方',
+  )
+
+  const withoutUsername = await uploadToGiphy(gifBytes, '', 'k', '', deny)
+  assert.match(
+    withoutUsername.error ?? '',
+    /上傳權限|developers\.giphy\.com/,
+    '沒填使用者名稱時，401 訊息要指向金鑰權限',
+  )
+  console.log('✓ 401 訊息會依有沒有 username 指向不同的真正原因')
 }
 
 async function realNetworkNegative(): Promise<void> {

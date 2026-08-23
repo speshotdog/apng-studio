@@ -110,12 +110,18 @@ async function run(): Promise<void> {
     ? resolve(argument)
     : resolve(import.meta.dirname, '..', 'assets', 'samples', '11.clip')
 
-  const key = await getGiphyKey()
+  const fromEnvironment = (process.env.GIPHY_API_KEY ?? '').trim()
+  const key = fromEnvironment || (await getGiphyKey())
   const settings = await getPublicSettings()
   console.log(`設定檔位置：${app.getPath('userData')}`)
+  console.log(`金鑰來源：${fromEnvironment ? '環境變數 GIPHY_API_KEY' : '程式設定檔'}`)
   console.log(`金鑰：${mask(key)}　使用者名稱：${settings.giphyUsername || '(未設定)'}`)
   if (!key) {
-    console.log('\n沒有找到已儲存的 GIPHY 金鑰。請先在程式的「設定」填入 API Key 並按儲存。')
+    console.log(
+      '\n找不到 GIPHY 金鑰。兩種做法：\n' +
+        '  A. 在程式的「設定」填入 API Key 按儲存，再跑一次這個指令\n' +
+        '  B. 直接用環境變數：GIPHY_API_KEY=你的金鑰 npm run try:giphy',
+    )
     app.exit(2)
     return
   }

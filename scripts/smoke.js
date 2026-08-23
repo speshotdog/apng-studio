@@ -31528,13 +31528,13 @@ async function duplicateProject(id, name) {
 // src/main/giphy.ts
 var UPLOAD_URL = "https://upload.giphy.com/v1/gifs";
 var API_ROOT = "https://api.giphy.com/v1/gifs";
-function failure(status, message) {
+function failure(status, message, username = "") {
   if (status === 429 || /rate\s*limit/i.test(message))
     return { ok: false, error: "\u5DF2\u9054\u4E0A\u50B3\u984D\u5EA6\uFF1Bbeta key \u6BCF\u5929\u4E0A\u9650 10 \u6B21" };
   if (status === 401 || status === 403)
     return {
       ok: false,
-      error: "\u91D1\u9470\u88AB GIPHY \u62D2\u7D55\uFF08Unauthorized\uFF09\u3002GIPHY \u7684\u4E00\u822C API key \u9810\u8A2D\u53EA\u80FD\u300C\u8B80\u53D6\u300D\uFF0C\u8981\u4E0A\u50B3\u5FC5\u9808\u5230 developers.giphy.com \u5E6B\u9019\u500B app \u7533\u8ACB\u4E0A\u50B3\u6B0A\u9650\uFF0C\u6216\u6539\u7528\u6709\u4E0A\u50B3\u6B0A\u9650\u7684 production key\u3002\uFF08\u4E5F\u8ACB\u78BA\u8A8D\u91D1\u9470\u6C92\u6709\u8907\u88FD\u5230\u591A\u9918\u7A7A\u767D\uFF09"
+      error: username ? `GIPHY \u62D2\u7D55\u4E86\u9019\u6B21\u4E0A\u50B3\uFF08Unauthorized\uFF09\u3002\u6700\u53EF\u80FD\u662F\u8A2D\u5B9A\u88E1\u7684\u4F7F\u7528\u8005\u540D\u7A31\u300C${username}\u300D\u4E0D\u662F\u9019\u628A\u91D1\u9470\u64C1\u6709\u7684 GIPHY \u983B\u9053 \u2014\u2014 \u628A\u5B83\u6E05\u7A7A\u518D\u8A66\u4E00\u6B21\u901A\u5E38\u5C31\u6703\u904E\u3002\uFF08\u82E5\u6E05\u7A7A\u5F8C\u4ECD\u5931\u6557\uFF0C\u624D\u9700\u8981\u78BA\u8A8D\u91D1\u9470\u6709\u6C92\u6709\u4E0A\u50B3\u6B0A\u9650\uFF09` : "GIPHY \u62D2\u7D55\u4E86\u9019\u6B21\u4E0A\u50B3\uFF08Unauthorized\uFF09\u3002\u8ACB\u78BA\u8A8D\u91D1\u9470\u6C92\u6709\u8907\u88FD\u5230\u591A\u9918\u7A7A\u767D\uFF0C\u4EE5\u53CA\u9019\u628A\u91D1\u9470\u5728 developers.giphy.com \u4E0A\u6709\u4E0A\u50B3\u6B0A\u9650\u3002"
     };
   return { ok: false, error: message || `GIPHY \u56DE\u50B3\u932F\u8AA4\uFF08HTTP ${status}\uFF09` };
 }
@@ -31567,9 +31567,9 @@ async function uploadToGiphy(gifBytes, tags, key, username, fetchImpl = fetch, t
     if (uploaded.status === 401 || uploaded.status === 403)
       uploaded = await post(`${UPLOAD_URL}?api_key=${encodeURIComponent(key)}`);
     const uploadBody = await json(uploaded);
-    if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? "");
+    if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? "", username.trim());
     if (typeof uploadBody.meta?.status === "number" && uploadBody.meta.status >= 400)
-      return failure(uploadBody.meta.status, uploadBody.meta.msg ?? "");
+      return failure(uploadBody.meta.status, uploadBody.meta.msg ?? "", username.trim());
     const id = uploadBody.data?.id;
     if (typeof id !== "string" || !id)
       return {

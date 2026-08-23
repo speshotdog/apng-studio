@@ -83,11 +83,14 @@ APNG Studio 是給動態貼圖使用的排幀與匯出工具。它會在匯出�
 
 在設定裡填好 API Key 後，「上傳到 GIPHY」會先開確認視窗。
 
-> **GIPHY 金鑰要有上傳權限。** developers.giphy.com 預設發的 API key 只能「讀取」，
-> 拿去上傳會被回 `Unauthorized`。要上傳得在該站幫這個 app 申請上傳權限，
-> 或改用有上傳權限的 production key。想單獨測金鑰能不能上傳，可以跑
+> **上傳失敗回「Unauthorized」時，先看「使用者名稱」欄位。**
+> 那一欄必須是這把金鑰擁有的 GIPHY 頻道，填了別人的或不存在的名稱就會被回 401，
+> 跟金鑰本身沒有關係 —— **沒有頻道就讓它空著**。
+> developers.giphy.com 一般的 API key 就可以上傳，不需要另外申請 production key。
+>
+> 想單獨測金鑰，可以跑
 > `GIPHY_API_KEY=你的金鑰 npm run try:giphy -- 某個.clip`，
-> 它會用真的檔案產一支 GIF 打真的 API，並告訴你是金鑰權限還是程式的問題。
+> 它會用真的檔案產一支 GIF 打真的 API，並分辨是金鑰問題還是程式問題。
 > 另外開發版與打包版的設定是分開存的（`%APPDATA%\Electron` 與 `%APPDATA%\APNG Studio`），
 > 金鑰不會互通。
 > 標籤用 chip 編輯器輸入：
