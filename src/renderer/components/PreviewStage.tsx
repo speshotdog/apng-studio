@@ -14,6 +14,9 @@ export function PreviewStage(): React.JSX.Element {
     exportWidth,
     exportHeight,
     scaleMode,
+    zoom,
+    offsetX,
+    offsetY,
     resolveSlot,
     set,
   } = state
@@ -28,15 +31,32 @@ export function PreviewStage(): React.JSX.Element {
       const bitmap = await ensureBitmap(id)
       ctx.imageSmoothingEnabled = scaleMode === 'smooth'
       if (scaleMode === 'smooth') ctx.imageSmoothingQuality = 'high'
-      const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height)
+      const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height) * zoom
       const width = bitmap.width * scale
       const height = bitmap.height * scale
-      ctx.drawImage(bitmap, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
+      ctx.drawImage(
+        bitmap,
+        (canvas.width - width) / 2 + offsetX,
+        (canvas.height - height) / 2 + offsetY,
+        width,
+        height,
+      )
     }
   }
   useEffect(() => {
     void draw(playhead)
-  }, [playhead, doc, state.bitmaps, exportWidth, exportHeight, scaleMode])
+  }, [
+    playhead,
+    doc,
+    state.bitmaps,
+    exportWidth,
+    exportHeight,
+    scaleMode,
+    zoom,
+    offsetX,
+    offsetY,
+    state.visibility,
+  ])
   useEffect(() => {
     if (!playing || !slots.length) return
     let raf = 0,
@@ -87,13 +107,23 @@ export function PreviewStage(): React.JSX.Element {
     <section className="preview">
       <div className="stage">
         {doc ? (
-          <canvas
-            ref={canvasRef}
-            width={exportWidth}
-            height={exportHeight}
-            style={{ imageRendering: scaleMode === 'pixel' ? 'pixelated' : 'auto' }}
-            aria-label={`輸出預覽 ${exportWidth} × ${exportHeight}`}
-          />
+          <div className="canvas-preview">
+            <canvas
+              ref={canvasRef}
+              width={exportWidth}
+              height={exportHeight}
+              style={{
+                imageRendering:
+                  state.lineTarget === 'plurkEmoticon' || scaleMode === 'pixel'
+                    ? 'pixelated'
+                    : 'auto',
+              }}
+              aria-label={`輸出預覽 ${exportWidth} × ${exportHeight}`}
+            />
+            <small>
+              {exportWidth} × {exportHeight}　縮放 {Math.round(zoom * 100)}%
+            </small>
+          </div>
         ) : (
           <div className="welcome">
             <i>AP</i>

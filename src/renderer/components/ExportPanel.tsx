@@ -1,11 +1,20 @@
 import { useMemo, useState } from 'react'
-import { validateForLine } from '../../codec/line.js'
-import type { ExportResult } from '../../preload/api.js'
-import { exportTo } from '../export.js'
+import { EXPORT_TARGETS, validateForLine, type ExportTarget } from '../../codec/line.js'
+import { encodeGif } from '../../codec/gif.js'
+import type { ExportResult, GiphyUploadResult, PublicSettings } from '../../preload/api.js'
+import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
 import { useStore } from '../state/store.js'
+import { autoFixForLine } from '../../codec/autofix.js'
+import { saveCurrentSnapshot, timestampName } from './ProjectPanel.js'
 
-export function ExportPanel(): React.JSX.Element {
+const clampFps = (value: number): number =>
+  Math.max(1, Math.min(60, Number.isFinite(value) ? Math.round(value) : 1))
+
+export function ExportPanel(props: {
+  settings: PublicSettings | null
+  openSettings: () => void
+}): React.JSX.Element {
   const state = useStore()
   const {
     doc,
@@ -17,35 +26,85 @@ export function ExportPanel(): React.JSX.Element {
     playCount,
     mergeIdentical,
     scaleMode,
+    lineTarget,
+    zoom,
+    offsetX,
+    offsetY,
     set,
   } = state
   const [result, setResult] = useState<ExportResult | null>(null)
   const [busy, setBusy] = useState(false)
+  const [upload, setUpload] = useState<{ bytes: Uint8Array; tags: string } | null>(null)
+  const [giphyResult, setGiphyResult] = useState<GiphyUploadResult | null>(null)
   const resolvedIds = useMemo(() => slots.map((_, i) => state.resolveSlot(i)), [slots])
   const plan = useMemo(
     () => planFromSlots(resolvedIds, fps, mergeIdentical),
     [resolvedIds, fps, mergeIdentical],
   )
-  const issues =
-    format === 'apng' ? validateForLine({ width, height, plan, numPlays: playCount }) : []
+  const issues = validateForLine({
+    target: lineTarget,
+    width,
+    height,
+    plan,
+    numPlays: playCount,
+    format,
+    byteLength: result?.ok ? result.byteLength : undefined,
+  })
   const errors = issues.filter((issue) => issue.level === 'error')
-  const orderedIssues = [...errors, ...issues.filter((issue) => issue.level === 'warning')]
-  const dimensions = (w: number, h: number) => set({ exportWidth: w, exportHeight: h })
-  const changeWidth = (w: number) =>
-    set({
-      exportWidth: w,
-      exportHeight:
-        state.lockAspect && doc ? Math.round((w * doc.canvas.height) / doc.canvas.width) : height,
-    })
-  const changeHeight = (h: number) =>
-    set({
-      exportHeight: h,
-      exportWidth:
-        state.lockAspect && doc ? Math.round((h * doc.canvas.width) / doc.canvas.height) : width,
-    })
-  const exportNow = async (): Promise<void> => {
+  const orderedIssues = [...errors, ...issues.filter((issue) => issue.level !== 'error')]
+  const dimensions = (w: number, h: number, unlock = false) =>
+    set({ exportWidth: w, exportHeight: h, ...(unlock ? { lockAspect: false } : {}) })
+  const selectTarget = (target: ExportTarget): void => {
+    if (!doc) return set({ lineTarget: target })
+    if (target === 'plurkEmoticon') {
+      const base = Math.min(48 / doc.canvas.width, 48 / doc.canvas.height)
+      return set({
+        lineTarget: target,
+        exportWidth: 48,
+        exportHeight: 48,
+        format: 'gif',
+        lockAspect: true,
+        zoom: Math.max(48 / doc.canvas.width, 48 / doc.canvas.height) / base,
+        offsetX: 0,
+        offsetY: 0,
+      })
+    }
+    if (target === 'sticker' || target === 'staticSticker') {
+      const spec = EXPORT_TARGETS[target]
+      const ratio = Math.min(spec.maxWidth / doc.canvas.width, spec.maxHeight / doc.canvas.height)
+      set({
+        lineTarget: target,
+        exportWidth: Math.round(doc.canvas.width * ratio),
+        exportHeight: Math.round(doc.canvas.height * ratio),
+      })
+    } else {
+      const size = EXPORT_TARGETS[target].fixedSize!
+      set({
+        lineTarget: target,
+        exportWidth: size.width,
+        exportHeight: size.height,
+        lockAspect: doc.canvas.width === doc.canvas.height,
+      })
+    }
+  }
+  const fill = (): void => {
     if (!doc) return
-    if (errors.length && !confirm(`LINE 檢查有 ${errors.length} 項錯誤，仍要匯出嗎？`)) return
+    const base = Math.min(width / doc.canvas.width, height / doc.canvas.height)
+    set({
+      zoom: Math.max(width / doc.canvas.width, height / doc.canvas.height) / base,
+      offsetX: 0,
+      offsetY: 0,
+    })
+  }
+  const exportNow = async (): Promise<void> => {
+    if (
+      !doc ||
+      (errors.length &&
+        !confirm(
+          `${lineTarget === 'plurkEmoticon' ? '噗浪' : 'LINE'} 規格檢查有 ${errors.length} 項錯誤，仍要匯出嗎？`,
+        ))
+    )
+      return
     setBusy(true)
     setResult(null)
     try {
@@ -53,6 +112,55 @@ export function ExportPanel(): React.JSX.Element {
     } finally {
       setBusy(false)
     }
+  }
+  const durationTicks =
+    EXPORT_TARGETS[lineTarget].allowedDurationsSec
+      ?.map((seconds) => Math.round(slots.length / seconds))
+      .filter((value) => value >= 1 && value <= 60) ?? []
+  const autofix = doc
+    ? autoFixForLine({
+        target: lineTarget,
+        canvasWidth: doc.canvas.width,
+        canvasHeight: doc.canvas.height,
+        slots,
+        fps,
+        playCount,
+        exportWidth: width,
+        exportHeight: height,
+        format,
+        identicalToPrev: resolvedIds.map((id, index) => index > 0 && id === resolvedIds[index - 1]),
+      })
+    : null
+  const applyAutofix = async (): Promise<void> => {
+    if (!autofix) return
+    const lines = autofix.changes.map((change) => `${change.label}　${change.from} → ${change.to}`)
+    const unresolved = autofix.unresolved.map((message) => `仍需處理：${message}`)
+    if (!confirm(`將套用以下調整：\n\n${[...lines, ...unresolved].join('\n')}`)) return
+    await saveCurrentSnapshot(`一鍵符合規範前_${timestampName()}`)
+    set({ ...autofix, notice: `已套用 ${autofix.changes.length} 項 LINE 規範調整` })
+  }
+  const prepareGiphy = async (): Promise<void> => {
+    if (!props.settings?.hasGiphyKey) return props.openSettings()
+    setBusy(true)
+    setGiphyResult(null)
+    try {
+      const payload = await createExportPayload()
+      const encoded = encodeGif(payload.frames, payload.width, payload.height, {
+        numPlays: payload.numPlays,
+        maxColors: payload.gif?.maxColors ?? 256,
+      })
+      setUpload({ bytes: encoded.bytes, tags: '' })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const confirmGiphy = async (): Promise<void> => {
+    if (!upload) return
+    setBusy(true)
+    const result = await window.api.uploadGiphy({ gifBytes: upload.bytes, tags: upload.tags })
+    setGiphyResult(result)
+    setUpload(null)
+    setBusy(false)
   }
   return (
     <aside className="panel export">
@@ -79,18 +187,57 @@ export function ExportPanel(): React.JSX.Element {
           </div>
         </div>
         <div className="section">
+          <label className="label">輸出目標</label>
+          <div className="segmented line-targets">
+            <span className="target-group-label">LINE</span>
+            {(['sticker', 'emoji', 'staticSticker', 'main'] as ExportTarget[]).map((target) => (
+              <button
+                key={target}
+                className={lineTarget === target ? 'active' : ''}
+                onClick={() => selectTarget(target)}
+              >
+                {EXPORT_TARGETS[target].label}
+              </button>
+            ))}
+            <span className="target-group-label">噗浪</span>
+            <button
+              className={lineTarget === 'plurkEmoticon' ? 'active' : ''}
+              onClick={() => selectTarget('plurkEmoticon')}
+            >
+              噗浪表情
+            </button>
+          </div>
+          <small className="target-note">{EXPORT_TARGETS[lineTarget].note}</small>
+        </div>
+        <div className="section">
           <label className="label">輸出尺寸</label>
           <div className="dimensions">
             <input
               type="number"
               value={width}
-              onChange={(e) => changeWidth(Number(e.target.value))}
+              onChange={(e) => {
+                const w = Number(e.target.value)
+                dimensions(
+                  w,
+                  state.lockAspect && doc
+                    ? Math.round((w * doc.canvas.height) / doc.canvas.width)
+                    : height,
+                )
+              }}
             />
             <span>×</span>
             <input
               type="number"
               value={height}
-              onChange={(e) => changeHeight(Number(e.target.value))}
+              onChange={(e) => {
+                const h = Number(e.target.value)
+                dimensions(
+                  state.lockAspect && doc
+                    ? Math.round((h * doc.canvas.width) / doc.canvas.height)
+                    : width,
+                  h,
+                )
+              }}
             />
           </div>
           <label>
@@ -105,24 +252,63 @@ export function ExportPanel(): React.JSX.Element {
             <button onClick={() => doc && dimensions(doc.canvas.width, doc.canvas.height)}>
               原始尺寸
             </button>
-            <button
-              onClick={() => {
-                if (!doc) return
-                const ratio = Math.min(320 / doc.canvas.width, 270 / doc.canvas.height)
-                dimensions(
-                  Math.round(doc.canvas.width * ratio),
-                  Math.round(doc.canvas.height * ratio),
-                )
-              }}
-            >
-              LINE 貼圖
-            </button>
-            <button onClick={() => dimensions(240, 240)}>主圖 240</button>
           </div>
+        </div>
+        <div className="section adjustment">
+          <label className="label">畫面調整</label>
+          <label>
+            縮放 <span>{Math.round(zoom * 100)}%</span>
+            <input
+              aria-label="縮放滑桿"
+              type="range"
+              min="20"
+              max="400"
+              value={Math.round(zoom * 100)}
+              onInput={(e) => set({ zoom: Number(e.currentTarget.value) / 100 })}
+            />
+            <input
+              aria-label="縮放百分比"
+              type="number"
+              min="20"
+              max="400"
+              value={Math.round(zoom * 100)}
+              onChange={(e) =>
+                set({ zoom: Math.max(0.2, Math.min(4, Number(e.target.value) / 100)) })
+              }
+            />
+          </label>
+          <div className="offsets">
+            <label>
+              位移 X{' '}
+              <input
+                type="number"
+                value={offsetX}
+                onChange={(e) => set({ offsetX: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              位移 Y{' '}
+              <input
+                type="number"
+                value={offsetY}
+                onChange={(e) => set({ offsetY: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+          <div className="quick">
+            <button onClick={() => set({ zoom: 1, offsetX: 0, offsetY: 0 })}>符合</button>
+            <button onClick={fill}>填滿</button>
+            <button onClick={() => set({ zoom: 1, offsetX: 0, offsetY: 0 })}>重設</button>
+          </div>
+          {lineTarget === 'plurkEmoticon' && (
+            <small className="plurk-hint">
+              48×48 很小，建議用縮放與位移把主體（例如臉）裁出來，整張縮進去會看不清楚
+            </small>
+          )}
         </div>
         <div className="section grid">
           <label>
-            縮放
+            縮放品質
             <select
               value={scaleMode}
               onChange={(e) => set({ scaleMode: e.target.value as 'smooth' | 'pixel' })}
@@ -131,16 +317,42 @@ export function ExportPanel(): React.JSX.Element {
               <option value="pixel">銳利</option>
             </select>
           </label>
-          <label>
-            FPS
+        </div>
+        <div className="section fps-control">
+          <label className="label">FPS</label>
+          <div className="fps-inputs">
             <input
+              aria-label="FPS 滑桿"
+              type="range"
+              min="1"
+              max="60"
+              step="1"
+              value={fps}
+              onInput={(e) => set({ fps: clampFps(Number(e.currentTarget.value)) })}
+            />
+            <input
+              aria-label="FPS 數字"
               type="number"
               min="1"
               max="60"
               value={fps}
-              onChange={(e) => set({ fps: Math.max(1, Math.min(60, Number(e.target.value))) })}
+              onChange={(e) => set({ fps: clampFps(Number(e.target.value)) })}
             />
-          </label>
+          </div>
+          <div className="fps-ticks">
+            {[8, 12, 15, 20, 24, 30].map((value) => (
+              <button
+                className={durationTicks.includes(value) ? 'valid' : ''}
+                key={value}
+                onClick={() => set({ fps: value })}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+          <small>
+            {fps} FPS　每格 {Math.round(1000 / fps)} ms
+          </small>
         </div>
         <div className="section">
           <label className="label">播放次數</label>
@@ -155,7 +367,7 @@ export function ExportPanel(): React.JSX.Element {
               </button>
             ))}
           </div>
-          <label title="APNG 規格與 LINE 驗證器都會合併連續相同的影格；關掉可能導致上傳失敗">
+          <label title="LINE 端可能仍會合併相同影格">
             <input
               type="checkbox"
               checked={mergeIdentical}
@@ -201,25 +413,22 @@ export function ExportPanel(): React.JSX.Element {
             </b>
           </div>
         </div>
-        <label className="line-toggle">
-          <input
-            type="checkbox"
-            checked={state.linePreset}
-            onChange={(e) => set({ linePreset: e.target.checked })}
-          />{' '}
-          LINE 規格檢查
-        </label>
+        {lineTarget !== 'plurkEmoticon' && (
+          <label className="line-toggle">
+            <input
+              type="checkbox"
+              checked={state.linePreset}
+              onChange={(e) => set({ linePreset: e.target.checked })}
+            />{' '}
+            LINE 規格檢查
+          </label>
+        )}
         {result && (
           <div className={`result ${result.ok ? 'success' : 'failure'}`}>
             {result.ok ? (
               <>
                 <b>匯出完成</b>
                 <p>{result.filePath}</p>
-                {result.info && (
-                  <p>
-                    {result.info.numFrames} 幀 · 播放 {result.info.numPlays || '無限'} 次
-                  </p>
-                )}
                 <p>{((result.byteLength ?? 0) / 1024).toFixed(1)} KB</p>
                 {result.warnings.map((w) => (
                   <p key={w}>⚠ {w}</p>
@@ -232,26 +441,119 @@ export function ExportPanel(): React.JSX.Element {
         )}
       </div>
       <div className="export-footer">
-        {state.linePreset && (
+        {(state.linePreset || lineTarget === 'plurkEmoticon') && (
           <div className="issues">
-            {format === 'gif' && (
-              <p className="warning">▲ LINE 動態貼圖只接受 APNG，GIF 不適用 LINE 規格檢查</p>
-            )}
-            {format === 'gif' ? null : orderedIssues.length ? (
+            {orderedIssues.length ? (
               orderedIssues.map((issue, i) => (
                 <p className={issue.level} key={i}>
-                  {issue.level === 'error' ? '●' : '▲'} {issue.message}
+                  {issue.level === 'error' ? '●' : issue.level === 'warning' ? '▲' : 'ℹ'}{' '}
+                  {issue.message}
                 </p>
               ))
             ) : (
-              <p className="pass">✓ 符合 LINE 動態貼圖規格</p>
+              <p className="pass">
+                ✓ 符合{' '}
+                {lineTarget === 'plurkEmoticon'
+                  ? '噗浪表情'
+                  : `LINE ${EXPORT_TARGETS[lineTarget].label}`}
+                規格
+              </p>
             )}
+            {errors.length > 0 &&
+              lineTarget !== 'staticSticker' &&
+              lineTarget !== 'plurkEmoticon' && (
+                <button className="autofix-button" onClick={() => void applyAutofix()}>
+                  一鍵符合規範
+                </button>
+              )}
           </div>
         )}
         <button className="export-button" disabled={!doc || busy} onClick={() => void exportNow()}>
           {busy ? '正在匯出…' : `匯出 ${format.toUpperCase()}`}
         </button>
+        <button
+          className="giphy-button"
+          disabled={!doc || busy}
+          title={props.settings?.hasGiphyKey ? '' : '請先到設定填入 GIPHY API Key'}
+          onClick={() => void prepareGiphy()}
+        >
+          上傳到 GIPHY
+        </button>
       </div>
+      {upload && (
+        <div className="modal-backdrop">
+          <section className="modal giphy-confirm" role="dialog" aria-modal="true">
+            <h2>即將上傳到 GIPHY</h2>
+            <p className="warning">
+              ⚠ 上傳到 GIPHY 的內容是公開的，任何人都能搜尋到。
+              <br />
+              如果這是還沒發表的作品或客戶的委託，請先確認可以公開。
+            </p>
+            <dl>
+              <dt>格式</dt>
+              <dd>GIF（GIPHY 不接受 APNG，將自動轉檔）</dd>
+              <dt>尺寸</dt>
+              <dd>
+                {width} × {height}
+              </dd>
+              <dt>幀數</dt>
+              <dd>{plan.actualFrameCount}</dd>
+              <dt>大小</dt>
+              <dd>約 {(upload.bytes.length / 1024).toFixed(0)} KB</dd>
+            </dl>
+            <label>
+              標籤
+              <input
+                value={upload.tags}
+                placeholder="可輸入，逗號分隔"
+                onChange={(event) => setUpload({ ...upload, tags: event.target.value })}
+              />
+            </label>
+            <footer>
+              <button onClick={() => setUpload(null)}>取消</button>
+              <button onClick={() => void confirmGiphy()}>確認上傳</button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {giphyResult && (
+        <div className="modal-backdrop">
+          <section className="modal" role="dialog" aria-modal="true">
+            <h2>{giphyResult.ok ? '上傳完成' : '上傳失敗'}</h2>
+            {giphyResult.ok ? (
+              <div className="giphy-links">
+                {[
+                  ['GIPHY 頁面', giphyResult.pageUrl],
+                  ['直接 GIF 網址', giphyResult.gifUrl],
+                ].map(
+                  ([label, url]) =>
+                    url && (
+                      <p key={label}>
+                        <b>{label}</b>
+                        <input readOnly value={url} />
+                        <button onClick={() => void navigator.clipboard.writeText(url)}>
+                          複製
+                        </button>
+                      </p>
+                    ),
+                )}
+                <button
+                  onClick={() =>
+                    giphyResult.pageUrl && void window.api.openExternal(giphyResult.pageUrl)
+                  }
+                >
+                  在瀏覽器開啟
+                </button>
+              </div>
+            ) : (
+              <p className="error">{giphyResult.error}</p>
+            )}
+            <footer>
+              <button onClick={() => setGiphyResult(null)}>關閉</button>
+            </footer>
+          </section>
+        </div>
+      )}
     </aside>
   )
 }

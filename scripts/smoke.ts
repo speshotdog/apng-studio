@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, nativeImage } from 'electron'
+import JSZip from 'jszip'
 import { verifyApng } from '../src/codec/apng.js'
 import { encodeGif } from '../src/codec/gif.js'
 import { registerIpc } from '../src/main/ipc.js'
@@ -68,6 +69,51 @@ async function run(): Promise<void> {
   await window.loadFile(join(projectRoot, 'out', 'renderer', 'index.html'), {
     query: { smoke: '1' },
   })
+
+  const fakeKey = `smoke-${crypto.randomUUID()}`
+  await window.webContents.executeJavaScript(`window.api.clearGiphy()`)
+  const savedSettings = await window.webContents.executeJavaScript(
+    `window.api.setGiphy(${JSON.stringify(fakeKey)}, 'smoke-user')`,
+  )
+  assert.equal(savedSettings.ok, true)
+  const publicSettings = await window.webContents.executeJavaScript(`window.api.getSettings()`)
+  assert.equal(publicSettings.hasGiphyKey, true)
+  assert.equal('giphyKey' in publicSettings, false, 'settings:get 不得回傳金鑰欄位')
+  const settingsPath = join(app.getPath('userData'), 'settings.json')
+  const settingsText = await readFile(settingsPath, 'utf8')
+  assert.equal(settingsText.includes(fakeKey), false, 'settings.json 不得含 API Key 明文')
+  await window.webContents.executeJavaScript(`document.querySelector('.settings-button').click()`)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const masked = await window.webContents.executeJavaScript(
+    `document.querySelector('input[aria-label="GIPHY API Key"]').type`,
+  )
+  assert.equal(masked, 'password')
+  await writeFile(
+    join(outputDir, 'ui-settings.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  )
+  await window.webContents.executeJavaScript(
+    `document.querySelector('.settings-dialog footer button:last-child')?.previousElementSibling?.click()`,
+  )
+  await window.webContents.executeJavaScript(`window.api.clearGiphy()`)
+  assert.equal(
+    (await window.webContents.executeJavaScript(`window.api.getSettings()`)).hasGiphyKey,
+    false,
+  )
+
+  const withStore = async <T>(script: string): Promise<T> =>
+    window!.webContents.executeJavaScript(`(async () => {
+      const smoke = window.__smoke
+      const before = smoke.snapshotStore()
+      try { return await (${script})() }
+      finally { await smoke.restoreStore(before); await smoke.waitIdle() }
+    })()`)
+  const assertCaptureState = async (expected: Record<string, unknown>): Promise<void> => {
+    const actual = await window!.webContents.executeJavaScript(
+      `(() => { const s = window.__smoke.store.getState(); return { fps: s.fps, exportWidth: s.exportWidth, exportHeight: s.exportHeight, lineTarget: s.lineTarget, playCount: s.playCount } })()`,
+    )
+    assert.deepEqual(actual, expected, `截圖前 store 狀態不符：${JSON.stringify(actual)}`)
+  }
 
   const samplePath = join(projectRoot, 'assets', 'samples', '11.clip')
   await window.webContents.executeJavaScript(`(async () => {
@@ -152,6 +198,8 @@ async function run(): Promise<void> {
     node.querySelector('input[type=checkbox]').click()
     await window.__smoke.waitIdle()
     const after = [...document.querySelector('.stage canvas').getContext('2d').getImageData(0, 0, 360, 360).data]
+    node.querySelector('input[type=checkbox]').click()
+    await window.__smoke.waitIdle()
     return before.some((value, index) => value !== after[index])
   })()`)
   assert.equal(visibilityChanged, true, '切換圖層可見性必須改變預覽 RGBA')
@@ -206,7 +254,7 @@ async function run(): Promise<void> {
   assert.equal(gifResult.ok, true, gifResult.error)
   const gifUi = await window.webContents.executeJavaScript(`({
     frameLabel: [...document.querySelectorAll('.stats span')].map((node) => node.textContent).find((text) => text.includes('GIF')),
-    lineWarning: [...document.querySelectorAll('.issues .warning')].some((node) => node.textContent.includes('只接受 APNG')),
+    lineWarning: [...document.querySelectorAll('.issues .info')].some((node) => node.textContent.includes('只接受 APNG')),
     hasDither: document.body.textContent.includes('抖色')
   })`)
   assert.match(gifUi.frameLabel, /實際 GIF 幀數/)
@@ -215,6 +263,26 @@ async function run(): Promise<void> {
   const gif = new Uint8Array(await readFile(gifPath))
   assert.ok(gif.length > 0)
   assert.equal(gifFrameCount(gif), 6)
+  const plurkPath = join(outputDir, 'export-plurk.gif')
+  const plurk = await window.webContents.executeJavaScript(`(async () => {
+    [...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '噗浪表情').click()
+    await window.__smoke.waitIdle()
+    const state = window.__smoke.store.getState()
+    const result = await window.__smoke.exportTo(${JSON.stringify(plurkPath)})
+    return { result, width: state.exportWidth, height: state.exportHeight, format: state.format, zoom: state.zoom }
+  })()`)
+  assert.equal(plurk.result.ok, true, plurk.result.error)
+  assert.deepEqual(
+    { width: plurk.width, height: plurk.height, format: plurk.format },
+    { width: 48, height: 48, format: 'gif' },
+  )
+  assert.ok(plurk.zoom >= 1, '噗浪表情必須自動使用填滿構圖')
+  const plurkGif = new Uint8Array(await readFile(plurkPath))
+  assert.equal(new TextDecoder().decode(plurkGif.subarray(0, 6)), 'GIF89a')
+  assert.equal(plurkGif[6]! | (plurkGif[7]! << 8), 48)
+  assert.equal(plurkGif[8]! | (plurkGif[9]! << 8), 48)
+  assert.ok(plurkGif.length < 256 * 1024)
+  await writeFile(join(outputDir, 'ui-plurk.png'), (await window.webContents.capturePage()).toPNG())
   const warningProbe = encodeGif([{ rgba: new Uint8Array(4), delayMs: 1000 / 24 }], 1, 1, {
     numPlays: 1,
     maxColors: 2,
@@ -225,7 +293,7 @@ async function run(): Promise<void> {
     window.__smoke.store.getState().set({ format: 'apng' })
     await window.__smoke.waitIdle()
     const started = performance.now()
-    document.querySelectorAll('.quick button')[1].click()
+    ;[...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '動態貼圖').click()
     await window.__smoke.waitIdle()
     const resizeMs = performance.now() - started
     const first = window.__smoke.store.getState()
@@ -279,7 +347,7 @@ async function run(): Promise<void> {
   })()`)
   await new Promise((resolve) => setTimeout(resolve, 100))
   await window.webContents.executeJavaScript(
-    `document.querySelectorAll('.quick button')[1].click()`,
+    `[...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '動態貼圖').click()`,
   )
   await new Promise((resolve) => setTimeout(resolve, 100))
   const importedTimeline = await window.webContents.executeJavaScript(`(() => {
@@ -304,6 +372,14 @@ async function run(): Promise<void> {
   assert.equal(Number(importedTimeline.stats[0]), 20)
   assert.ok(importedTimeline.stats.some((value: string) => value.includes('1.00')))
   assert.equal(importedTimeline.errors, 0)
+  const timelineOpaque = await window.webContents.executeJavaScript(`(() => {
+    const canvas = document.querySelector('.stage canvas')
+    const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    let count = 0
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 0) count++
+    return count
+  })()`)
+  assert.ok(timelineOpaque > 0, 'ui-timeline.png 截圖前預覽 canvas 不可全透明')
   await writeFile(
     join(outputDir, 'ui-timeline.png'),
     (await window.webContents.capturePage()).toPNG(),
@@ -316,6 +392,147 @@ async function run(): Promise<void> {
   const timelineInfo = verifyApng(new Uint8Array(await readFile(timelineExportPath)))
   assert.equal(timelineInfo.numPlays, 4)
   assert.equal(timelineInfo.numFrames, Number(importedTimeline.stats[1]))
+
+  const adjustment = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke
+    const store = smoke.store
+    store.getState().set({ playhead: 0, selectedSlot: 0, exportWidth: 270, exportHeight: 270, zoom: 1, offsetX: 0, offsetY: 0 })
+    await smoke.waitIdle()
+    const pixels = (zoom, offsetX = 0) => smoke.composeFrame(0, 270, 270, 'smooth', { zoom, offsetX, offsetY: 0 })
+    const baseline = pixels(1)
+    const implicit = smoke.composeFrame(0, 270, 270, 'smooth')
+    const stats = (rgba) => {
+      let count = 0, sumX = 0
+      for (let i = 3; i < rgba.length; i += 4) if (rgba[i] > 0) { count++; sumX += ((i - 3) / 4) % 270 }
+      return { count, centerX: sumX / count }
+    }
+    return { same: baseline.every((value, index) => value === implicit[index]), base: stats(baseline), large: stats(pixels(2)), small: stats(pixels(.5)), shifted: stats(pixels(1, 100)) }
+  })()`)
+  assert.equal(adjustment.same, true, 'zoom=1、offset=0 必須維持既有輸出')
+  assert.ok(adjustment.large.count > adjustment.base.count, 'zoom=2 非透明像素數必須增加')
+  assert.ok(adjustment.small.count < adjustment.base.count, 'zoom=0.5 非透明像素數必須減少')
+  assert.ok(adjustment.shifted.centerX > adjustment.base.centerX, 'offsetX=100 必須讓影像重心右移')
+
+  const controls11 = await withStore<any>(`async () => {
+    const store = window.__smoke.store
+    const clickTarget = (name) => [...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === name).click()
+    clickTarget('動態表情貼'); await window.__smoke.waitIdle()
+    const emoji = { width: store.getState().exportWidth, height: store.getState().exportHeight }
+    store.getState().set({ zoom: 1.5 })
+    await window.__smoke.waitIdle()
+    const slider = document.querySelector('input[aria-label="FPS 滑桿"]')
+    slider.value = '12'; slider.dispatchEvent(new Event('input', { bubbles: true }))
+    await window.__smoke.waitIdle()
+    const duration12 = [...document.querySelectorAll('.stats b')][2].textContent
+    const number = document.querySelector('input[aria-label="FPS 數字"]')
+    const setInput = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) }
+    setInput(number, '99'); await window.__smoke.waitIdle()
+    const high = { fps: store.getState().fps, slider: slider.value, number: number.value }
+    setInput(number, '0'); await window.__smoke.waitIdle()
+    const low = { fps: store.getState().fps, slider: slider.value, number: number.value }
+    clickTarget('主要圖片'); await window.__smoke.waitIdle()
+    const main = { width: store.getState().exportWidth, height: store.getState().exportHeight }
+    clickTarget('動態表情貼'); await window.__smoke.waitIdle()
+    return { emoji, main, duration12, high, low, fps: store.getState().fps }
+  }`)
+  assert.deepEqual(controls11.emoji, { width: 180, height: 180 })
+  assert.deepEqual(controls11.main, { width: 240, height: 240 })
+  assert.match(controls11.duration12, /1\.67/)
+  assert.deepEqual(controls11.high, { fps: 60, slider: '60', number: '60' })
+  assert.deepEqual(controls11.low, { fps: 1, slider: '1', number: '1' })
+  await window.webContents.executeJavaScript(
+    `(async () => { const s = window.__smoke.store.getState(); const c = window.__smoke.getAnimationCels(); s.set({ slots: c.map((x) => ({layerId:x.id})), fps: 6, playCount: 4, lineTarget: 'emoji', exportWidth: 180, exportHeight: 180, format: 'apng' }); await window.__smoke.waitIdle() })()`,
+  )
+  await assertCaptureState({
+    fps: 6,
+    exportWidth: 180,
+    exportHeight: 180,
+    lineTarget: 'emoji',
+    playCount: 4,
+  })
+  await writeFile(join(outputDir, 'ui-emoji.png'), (await window.webContents.capturePage()).toPNG())
+
+  const autofixUi = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
+    state.set({ mode: 'animation', slots: cels.slice(0, 4).map((cel) => ({ layerId: cel.id })), fps: 20, exportWidth: 360, exportHeight: 360, playCount: 1, lineTarget: 'sticker', format: 'apng' })
+    window.confirm = () => true
+    await smoke.waitIdle()
+    document.querySelector('.autofix-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 100)); await smoke.waitIdle()
+    const after = smoke.store.getState()
+    return { slots: after.slots.length, fps: after.fps, width: after.exportWidth, height: after.exportHeight, plays: after.playCount, errors: document.querySelectorAll('.issues .error').length }
+  })()`)
+  assert.deepEqual(autofixUi, { slots: 6, fps: 6, width: 270, height: 270, plays: 4, errors: 0 })
+  await assertCaptureState({
+    fps: 6,
+    exportWidth: 270,
+    exportHeight: 270,
+    lineTarget: 'sticker',
+    playCount: 4,
+  })
+  await writeFile(
+    join(outputDir, 'ui-autofix.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  )
+
+  const snapshotResult = await window.webContents.executeJavaScript(`(async () => {
+    for (const item of await window.api.listProjects()) await window.api.deleteProject(item.id)
+    window.prompt = () => 'Smoke 快照'; window.confirm = () => true
+    document.querySelector('.project-heading button').click()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const saved = await window.api.listProjects()
+    const original = window.__smoke.store.getState().fps
+    window.__smoke.store.getState().set({ fps: 33 })
+    document.querySelector('.project-row').click()
+    await new Promise((resolve) => setTimeout(resolve, 300)); await window.__smoke.waitIdle()
+    return { count: saved.length, original, restored: window.__smoke.store.getState().fps }
+  })()`)
+  assert.deepEqual(snapshotResult, { count: 1, original: 6, restored: 6 })
+
+  const packSource = join(outputDir, 'pack-source')
+  await mkdir(packSource, { recursive: true })
+  const png = (width: number, height: number, value: number): Buffer => {
+    const bgra = Buffer.alloc(width * height * 4)
+    for (let index = 0; index < bgra.length; index += 4) bgra.set([value, 180, 240, 255], index)
+    return nativeImage.createFromBitmap(bgra, { width, height }).toPNG()
+  }
+  for (let index = 1; index <= 32; index++)
+    await writeFile(join(packSource, `${String(index).padStart(2, '0')}.png`), png(370, 320, index))
+  await writeFile(join(packSource, 'main.png'), png(240, 240, 80))
+  await writeFile(join(packSource, 'tab.png'), png(96, 74, 120))
+  await writeFile(join(packSource, '29_3.png'), png(10, 10, 1))
+  const packPath = join(outputDir, 'pack.zip')
+  const packResult = await window.webContents.executeJavaScript(`(async () => {
+    const s = window.__smoke.store.getState(); s.set({ mode: 'pack', packTarget: 'staticSticker', packCount: 32 })
+    const imported = await window.api.importPackFolder(${JSON.stringify(packSource)})
+    s.set({ packCells: imported.cells }); await window.__smoke.waitIdle()
+    const result = await window.api.exportPack(${JSON.stringify(packPath)}, imported.cells)
+    return { result, count: imported.cells.length, skipped: imported.skipped, invalid: document.querySelectorAll('.pack-cell.invalid').length, filled: document.querySelectorAll('.pack-cell.filled').length }
+  })()`)
+  assert.equal(packResult.count, 34)
+  assert.deepEqual(packResult.skipped, ['29_3.png'])
+  assert.equal(packResult.invalid, 0)
+  assert.equal(packResult.filled, 34)
+  assert.equal(packResult.result.ok, true, packResult.result.error)
+  const zip = await JSZip.loadAsync(await readFile(packPath))
+  const expectedNames = [
+    ...Array.from({ length: 32 }, (_, index) => `${String(index + 1).padStart(2, '0')}.png`),
+    'main.png',
+    'tab.png',
+  ]
+  assert.deepEqual(Object.keys(zip.files).sort(), expectedNames.sort())
+  for (const name of expectedNames) {
+    const bytes = await zip.file(name)!.async('nodebuffer')
+    const image = nativeImage.createFromBuffer(bytes)
+    const expected =
+      name === 'main.png'
+        ? { width: 240, height: 240 }
+        : name === 'tab.png'
+          ? { width: 96, height: 74 }
+          : { width: 370, height: 320 }
+    assert.deepEqual(image.getSize(), expected)
+  }
+  await writeFile(join(outputDir, 'ui-pack.png'), (await window.webContents.capturePage()).toPNG())
 
   // 拖放路徑：把真正的 .clip 位元組餵進 clip:openBuffer，結果必須與走檔案路徑開出來的一致。
   // 放在最後跑，因為它會把主行程的 current 換成 buffer 解析出來的文件。

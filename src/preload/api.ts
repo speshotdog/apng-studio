@@ -1,4 +1,5 @@
 import type { ApngInfo } from '../codec/apng.js'
+import type { PackImportResult, ProjectSnapshot } from '../project/types.js'
 export interface LayerNode {
   id: number
   name: string
@@ -40,6 +41,19 @@ export interface ExportResult {
   error?: string
   byteLength?: number
 }
+export interface PublicSettings {
+  hasGiphyKey: boolean
+  giphyUsername: string
+  encryptionAvailable: boolean
+  progressExpanded: boolean
+}
+export interface GiphyUploadResult {
+  ok: boolean
+  id?: string
+  pageUrl?: string
+  gifUrl?: string
+  error?: string
+}
 export interface RenderedLayer {
   width: number
   height: number
@@ -52,5 +66,27 @@ export interface Api {
   renderLayer(layerId: number, overrides: Array<[number, boolean]>): Promise<RenderedLayer>
   saveExport(payload: ExportPayload): Promise<ExportResult>
   exportTo(filePath: string, payload: ExportPayload): Promise<ExportResult>
-  onMenuCommand(callback: (command: 'open' | 'export-apng' | 'export-gif') => void): () => void
+  listProjects(): Promise<ProjectSnapshot[]>
+  saveProject(snapshot: ProjectSnapshot): Promise<ProjectSnapshot[]>
+  deleteProject(id: string): Promise<ProjectSnapshot[]>
+  renameProject(id: string, name: string): Promise<ProjectSnapshot[]>
+  importPackFolder(path?: string): Promise<PackImportResult | null>
+  hydratePackCells(
+    cells: NonNullable<ProjectSnapshot['pack']>['cells'],
+  ): Promise<PackImportResult['cells']>
+  exportPack(
+    filePath: string | undefined,
+    cells: PackImportResult['cells'],
+    target?: import('../codec/line.js').ExportTarget,
+  ): Promise<ExportResult>
+  getSettings(): Promise<PublicSettings>
+  setGiphy(key: string, username: string): Promise<{ ok: boolean; error?: string }>
+  clearGiphy(): Promise<void>
+  testGiphy(): Promise<{ ok: boolean; message: string }>
+  setProgressExpanded(expanded: boolean): Promise<void>
+  uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
+  openExternal(url: string): Promise<void>
+  onMenuCommand(
+    callback: (command: 'open' | 'export-apng' | 'export-gif' | 'settings') => void,
+  ): () => void
 }

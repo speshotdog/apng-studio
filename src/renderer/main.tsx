@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App.js'
-import { ensureBitmap } from './compose.js'
+import { composeFrame, ensureBitmap } from './compose.js'
 import { exportTo } from './export.js'
 import { useStore } from './state/store.js'
 import './styles.css'
@@ -45,6 +45,30 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
       )
     },
     exportTo,
+    composeFrame,
+    snapshotStore: () => {
+      const {
+        doc: _doc,
+        bitmaps: _bitmaps,
+        set: _set,
+        open: _open,
+        setBitmap: _setBitmap,
+        setSlot: _setSlot,
+        resolveSlot: _resolveSlot,
+        importCspTimeline: _import,
+        visibility,
+        ...serializable
+      } = useStore.getState()
+      return { ...serializable, visibility: [...visibility] }
+    },
+    restoreStore: async (snapshot: Record<string, unknown>) => {
+      useStore
+        .getState()
+        .set({ ...snapshot, visibility: new Map(snapshot.visibility as Array<[number, boolean]>) })
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      )
+    },
   }
 }
 ReactDOM.createRoot(document.getElementById('root')!).render(

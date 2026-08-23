@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { registerIpc } from './ipc.js'
 let mainWindow: BrowserWindow | null = null
-function send(command: 'open' | 'export-apng' | 'export-gif'): void {
+function send(command: 'open' | 'export-apng' | 'export-gif' | 'settings'): void {
   mainWindow?.webContents.send('menu:command', command)
 }
 function argument(name: string): string | undefined {
@@ -70,6 +70,7 @@ app.whenReady().then(() => {
           { label: '結束', role: 'quit' },
         ],
       },
+      { label: '設定', click: () => send('settings') },
     ]),
   )
   void createWindow().catch((error) => {

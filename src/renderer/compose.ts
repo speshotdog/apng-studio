@@ -26,6 +26,7 @@ export function composeFrame(
   width: number,
   height: number,
   mode: ScaleMode,
+  adjustment?: { zoom: number; offsetX: number; offsetY: number },
 ): Uint8Array {
   const state = useStore.getState()
   const id = state.resolveSlot(slotIndex)
@@ -37,10 +38,11 @@ export function composeFrame(
   if (bitmap) {
     ctx.imageSmoothingEnabled = mode === 'smooth'
     if (mode === 'smooth') ctx.imageSmoothingQuality = 'high'
-    const scale = Math.min(width / bitmap.width, height / bitmap.height)
+    const { zoom, offsetX, offsetY } = adjustment ?? state
+    const scale = Math.min(width / bitmap.width, height / bitmap.height) * zoom
     const w = bitmap.width * scale,
       h = bitmap.height * scale
-    ctx.drawImage(bitmap, (width - w) / 2, (height - h) / 2, w, h)
+    ctx.drawImage(bitmap, (width - w) / 2 + offsetX, (height - h) / 2 + offsetY, w, h)
   }
   return new Uint8Array(ctx.getImageData(0, 0, width, height).data)
 }

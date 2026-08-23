@@ -15,7 +15,13 @@ export async function createExportPayload(): Promise<ExportPayload> {
   await Promise.all(ids.map(ensureBitmap))
   const current = useStore.getState()
   let frames = current.slots.map((_, index) => ({
-    rgba: composeFrame(index, current.exportWidth, current.exportHeight, current.scaleMode),
+    rgba: composeFrame(
+      index,
+      current.exportWidth,
+      current.exportHeight,
+      current.scaleMode,
+      current,
+    ),
     delayMs:
       Math.round(((index + 1) * 1000) / current.fps) - Math.round((index * 1000) / current.fps),
   }))

@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type { ClipSummary, LayerNode } from '../../preload/api.js'
+import type { ExportTarget } from '../../codec/line.js'
+import type { PackImportCell } from '../../project/types.js'
 export type ScaleMode = 'smooth' | 'pixel'
 export interface Slot {
   layerId: number | null
 }
-interface State {
+export interface State {
   doc: ClipSummary | null
   bitmaps: Map<string, ImageBitmap>
   visibility: Map<number, boolean>
@@ -20,11 +22,19 @@ interface State {
   scaleMode: ScaleMode
   mergeIdentical: boolean
   linePreset: boolean
+  lineTarget: ExportTarget
+  zoom: number
+  offsetX: number
+  offsetY: number
   playing: boolean
   playhead: number
   gifColors: number
   gifDither: boolean
   notice: string
+  mode: 'animation' | 'pack'
+  packTarget: ExportTarget
+  packCount: number
+  packCells: PackImportCell[]
   set: (values: Partial<State>) => void
   open: (doc: ClipSummary) => void
   setBitmap: (key: string, bitmap: ImageBitmap) => void
@@ -52,11 +62,19 @@ export const useStore = create<State>((set, get) => ({
   scaleMode: 'smooth',
   mergeIdentical: true,
   linePreset: true,
+  lineTarget: 'sticker',
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
   playing: false,
   playhead: 0,
   gifColors: 256,
   gifDither: false,
   notice: '',
+  mode: 'animation',
+  packTarget: 'staticSticker',
+  packCount: 32,
+  packCells: [],
   set,
   open: (doc) => {
     const visibility = new Map<number, boolean>()
@@ -72,6 +90,9 @@ export const useStore = create<State>((set, get) => ({
       fps: doc.timeline?.frameRate ?? 12,
       exportWidth: doc.canvas.width,
       exportHeight: doc.canvas.height,
+      zoom: 1,
+      offsetX: 0,
+      offsetY: 0,
     })
   },
   setBitmap: (id, bitmap) => set((state) => ({ bitmaps: new Map(state.bitmaps).set(id, bitmap) })),
