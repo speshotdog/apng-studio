@@ -70,7 +70,10 @@ export function SettingsDialog(props: {
           <span className={status.includes('有效') ? 'success-text' : ''}>狀態：{status}</span>
         </div>
         {!settings?.encryptionAvailable && (
-          <p className="warning">此環境無法安全儲存，關閉程式後需重新輸入</p>
+          <p className="warning">
+            此環境沒有系統金鑰庫，金鑰會以純文字存在設定檔（
+            {'%APPDATA%'}\APNG Studio\settings.json）。共用電腦請改用「清除金鑰」。
+          </p>
         )}
         <p className="settings-help">
           ⓘ 到 developers.giphy.com 申請。免費的 beta key 每天只能上傳 10 個，且無法指定 GIPHY
@@ -81,6 +84,20 @@ export function SettingsDialog(props: {
           <input value={username} onChange={(event) => setUsername(event.target.value)} />
         </label>
         <small>ⓘ 只有 production key 才能指定。</small>
+        <h3>草稿資料夾</h3>
+        <div className="settings-test">
+          <button
+            onClick={() =>
+              void window.api.pickDraftFolder().then(async (picked) => {
+                if (picked) setSettings(await window.api.getSettings())
+              })
+            }
+          >
+            選擇資料夾
+          </button>
+          <span>{settings?.draftFolder || '尚未設定'}</span>
+        </div>
+        <small>ⓘ 設定後可用「檔案 → 草稿資料夾」（Ctrl+D）直接列出裡面的檔案開啟。</small>
         <footer>
           {settings?.hasGiphyKey && (
             <button onClick={() => void window.api.clearGiphy().then(props.onClose)}>

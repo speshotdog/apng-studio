@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Api, ExportPayload } from './api.js'
+import type { Api, ExportPayload, MenuCommand } from './api.js'
 const api: Api = {
   openClip: (filePath?: string) => ipcRenderer.invoke('clip:open', filePath),
   openClipBuffer: (bytes) => ipcRenderer.invoke('clip:openBuffer', bytes),
@@ -19,6 +19,9 @@ const api: Api = {
   hydratePackCells: (cells) => ipcRenderer.invoke('project:hydratePackCells', cells),
   exportPack: (filePath, cells, target) =>
     ipcRenderer.invoke('project:exportPack', filePath, cells, target),
+  listDrafts: (folder) => ipcRenderer.invoke('drafts:list', folder),
+  pickDraftFolder: () => ipcRenderer.invoke('drafts:pick'),
+  encodeForPack: (payload) => ipcRenderer.invoke('pack:encode', payload),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setGiphy: (key, username) => ipcRenderer.invoke('settings:setGiphy', key, username),
   clearGiphy: () => ipcRenderer.invoke('settings:clearGiphy'),
@@ -27,8 +30,7 @@ const api: Api = {
   uploadGiphy: (payload) => ipcRenderer.invoke('giphy:upload', payload),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   onMenuCommand: (callback) => {
-    const listener = (_event: Electron.IpcRendererEvent, command: Parameters<typeof callback>[0]) =>
-      callback(command)
+    const listener = (_event: Electron.IpcRendererEvent, command: MenuCommand) => callback(command)
     ipcRenderer.on('menu:command', listener)
     return () => ipcRenderer.removeListener('menu:command', listener)
   },

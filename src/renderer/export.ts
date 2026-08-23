@@ -1,7 +1,8 @@
 import type { ExportPayload, ExportResult } from '../preload/api.js'
-import { composeFrame, ensureBitmap } from './compose.js'
+import { allLayerIds, composeFrame, ensureBitmap } from './compose.js'
 import { useStore } from './state/store.js'
 import { EXPORT_TARGETS } from '../codec/line.js'
+import { frameDelays } from '../codec/timing.js'
 
 export async function createExportPayload(size?: {
   width: number
@@ -9,27 +10,19 @@ export async function createExportPayload(size?: {
 }): Promise<ExportPayload> {
   const state = useStore.getState()
   if (!state.doc) throw new Error('請先開啟 .clip 檔案')
-  const ids = [
-    ...new Set(
-      state.slots
-        .map((_, index) => state.resolveSlot(index))
-        .filter((id): id is number => id !== null),
-    ),
-  ]
-  await Promise.all(ids.map(ensureBitmap))
+  await Promise.all(allLayerIds().map(ensureBitmap))
   const current = useStore.getState()
   const spec = EXPORT_TARGETS[current.lineTarget]
-  const indexes = spec.staticOnly ? [current.staticFrame] : current.slots.map((_, index) => index)
-  let frames = indexes.map((index) => ({
-    rgba: composeFrame(
-      index,
-      size?.width ?? current.exportWidth,
-      size?.height ?? current.exportHeight,
-      current.scaleMode,
-      current,
-    ),
-    delayMs:
-      Math.round(((index + 1) * 1000) / current.fps) - Math.round((index * 1000) / current.fps),
+  const frameCount = current.frameCount()
+  const indexes = spec.staticOnly
+    ? [Math.min(current.staticFrame, frameCount - 1)]
+    : Array.from({ length: frameCount }, (_, index) => index)
+  const delays = frameDelays(indexes.length, current.fps)
+  const width = size?.width ?? current.exportWidth
+  const height = size?.height ?? current.exportHeight
+  let frames = indexes.map((index, position) => ({
+    rgba: composeFrame(index, width, height, current.scaleMode),
+    delayMs: delays[position]!,
   }))
   if (current.format === 'gif' && current.mergeIdentical) {
     frames = frames.reduce<typeof frames>((merged, frame) => {
@@ -44,8 +37,8 @@ export async function createExportPayload(size?: {
   }
   return {
     format: current.format,
-    width: size?.width ?? current.exportWidth,
-    height: size?.height ?? current.exportHeight,
+    width,
+    height,
     frames,
     numPlays: current.playCount,
     mergeIdentical: current.mergeIdentical,

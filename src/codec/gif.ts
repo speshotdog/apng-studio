@@ -53,8 +53,10 @@ export function encodeGif(
     const palette = quantize(rgba, opts.maxColors, { format: 'rgba4444', oneBitAlpha: 127 })
     const indexed = applyPalette(rgba, palette, 'rgba4444')
     const transparentIndex = hasTransparency ? palette.findIndex((color) => color[3] === 0) : -1
-    // GIF repeat 是「首次播放後額外重播幾次」；APNG numPlays 是總播放次數。
-    const repeat = opts.numPlays === 0 ? 0 : opts.numPlays - 1
+    // gifenc 的 repeat：-1 = 只播一次、0 = 無限循環、n = 額外重播 n 次。
+    // APNG 的 numPlays 是「總播放次數」，0 才是無限，所以 1 要對到 -1 而不是 0，
+    // 否則使用者選「播放 1 次」會得到一個永遠在跑的 GIF。
+    const repeat = opts.numPlays === 0 ? 0 : opts.numPlays === 1 ? -1 : opts.numPlays - 1
     gif.writeFrame(indexed, width, height, {
       palette,
       delay: actualDelaysMs[frameIndex],

@@ -49,15 +49,26 @@ export async function uploadToGiphy(
     )
     if (tags.trim()) form.set('tags', tags.trim())
     if (username.trim()) form.set('username', username.trim())
-    const uploaded = await fetchImpl(UPLOAD_URL, {
+    // api_key 同時放在 query 與 form：GIPHY 兩種都收，但不同時期的閘道各只認一種。
+    const uploaded = await fetchImpl(`${UPLOAD_URL}?api_key=${encodeURIComponent(key)}`, {
       method: 'POST',
       body: form,
       signal: controller.signal,
     })
     const uploadBody = await json(uploaded)
     if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? '')
+    // HTTP 200 但 meta.status 是 4xx 的情況也要當失敗，否則會卡在「缺少圖片 ID」。
+    if (typeof uploadBody.meta?.status === 'number' && uploadBody.meta.status >= 400)
+      return failure(uploadBody.meta.status, uploadBody.meta.msg ?? '')
     const id = uploadBody.data?.id
-    if (typeof id !== 'string' || !id) return { ok: false, error: 'GIPHY 回應缺少圖片 ID' }
+    if (typeof id !== 'string' || !id)
+      return {
+        ok: false,
+        error: `GIPHY 回應缺少圖片 ID（HTTP ${uploaded.status}）：${redact(
+          JSON.stringify(uploadBody).slice(0, 200),
+          key,
+        )}`,
+      }
     const details = await fetchImpl(
       `${API_ROOT}/${encodeURIComponent(id)}?api_key=${encodeURIComponent(key)}`,
       {

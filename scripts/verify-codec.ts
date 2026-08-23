@@ -4,9 +4,40 @@ import { encodeApng, planApng, verifyApng, type ApngFrame } from '../src/codec/a
 import { encodeGif } from '../src/codec/gif.js'
 import { EXPORT_TARGETS, validateForLine } from '../src/codec/line.js'
 import { planFromSlots } from '../src/renderer/plan.js'
-import { useStore } from '../src/renderer/state/store.js'
+import { newTrack, useStore } from '../src/renderer/state/store.js'
 import { autoFixForLine } from '../src/codec/autofix.js'
 import { uploadToGiphy } from '../src/main/giphy.js'
+import { distributeDelays, frameDelays } from '../src/codec/timing.js'
+
+// —— 影格延遲：LINE 會把 fcTL 加總後要求剛好 1/2/3/4 秒 ——
+// 每一格都必須是 10 毫秒的整數倍，總和必須精確，否則 LINE 會回
+// 「播放時間請設定為1秒、2秒、3秒或4秒」。
+for (const [count, fps] of [
+  [5, 5],
+  [6, 6],
+  [8, 8],
+  [12, 6],
+  [18, 6],
+  [20, 5],
+  [7, 7],
+] as Array<[number, number]>) {
+  const delays = frameDelays(count, fps)
+  assert.equal(delays.length, count)
+  assert(
+    delays.every((delay) => delay % 10 === 0),
+    `${count}@${fps} 有非 10ms 整數倍的延遲`,
+  )
+  assert.equal(
+    delays.reduce((sum, delay) => sum + delay, 0),
+    (count / fps) * 1000,
+    `${count}@${fps} 總長度不精確`,
+  )
+}
+assert.deepEqual(distributeDelays(1000, 6), [160, 170, 170, 160, 170, 170])
+assert.equal(
+  distributeDelays(1000, 6).reduce((a, b) => a + b, 0),
+  1000,
+)
 
 const width = 64
 const height = 64
@@ -37,10 +68,27 @@ const slotPlan = planFromSlots([1, 2, 2, 2, 3], 20, true)
 assert.equal(slotPlan.actualFrameCount, 3)
 assert.equal(slotPlan.frames[1]!.delayMs, 150)
 assert.equal(slotPlan.totalDurationMs, 250)
-useStore.setState({ slots: [{ layerId: 5 }] })
+const oneTrack = (layerId: number | null) => [{ ...newTrack('t', 1), slots: [{ layerId }] }]
+useStore.setState({ tracks: oneTrack(5), activeTrack: 0 })
 assert.equal(useStore.getState().resolveSlot(3), 5)
-useStore.setState({ slots: [{ layerId: null }] })
+useStore.setState({ tracks: oneTrack(null), activeTrack: 0 })
 assert.equal(useStore.getState().resolveSlot(3), null)
+
+// 減少格數後再加回來，被切掉的內容要原封不動回來（避免手滑調低格數就白做）。
+useStore.setState({
+  tracks: [{ ...newTrack('t', 4), slots: [1, 2, 3, 4].map((layerId) => ({ layerId })) }],
+  activeTrack: 0,
+  trimmed: {},
+})
+useStore.getState().resizeFrames(2)
+assert.equal(useStore.getState().tracks[0]!.slots.length, 2)
+useStore.getState().resizeFrames(4)
+assert.deepEqual(
+  useStore.getState().tracks[0]!.slots.map(({ layerId }) => layerId),
+  [1, 2, 3, 4],
+)
+useStore.getState().undo()
+assert.equal(useStore.getState().tracks[0]!.slots.length, 2)
 
 const merged = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: true })
 const noMerge = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: false })
@@ -117,13 +165,12 @@ const fix = (ids: number[], target: 'sticker' | 'emoji' | 'main' = 'sticker') =>
     target,
     canvasWidth: 360,
     canvasHeight: 360,
-    slots: ids.map((layerId) => ({ layerId })),
+    resolvedIds: ids,
     fps: 20,
     playCount: 1,
     exportWidth: 360,
     exportHeight: 360,
     format: 'apng',
-    identicalToPrev: ids.map((id, index) => index > 0 && id === ids[index - 1]),
   })
 const fixedFour = fix([1, 2, 3, 4])
 assert.deepEqual(
@@ -136,8 +183,46 @@ assert.equal(fixedFour.playCount, 4)
 assert.deepEqual(fixedFour.unresolved, [])
 assert.deepEqual(
   fix([1, 2]).slots.map(({ layerId }) => layerId),
-  [1, 2, 1, 2, 1],
+  [1, 2, 1, 2, 1, 2],
 )
+// 補幀出來的東西必須直接通過 LINE 規格檢查，這是這個功能存在的理由。
+for (const ids of [
+  [1, 2],
+  [1, 2, 3],
+  [1, 2, 3, 4],
+  [1, 1, 2, 2, 3, 3],
+  [1, 2, 3, 4, 5, 6, 7],
+]) {
+  const fixed = fix(ids)
+  const plan = planFromSlots(
+    fixed.slots.map(({ layerId }) => layerId),
+    fixed.fps,
+    true,
+  )
+  const seconds = plan.totalDurationMs / 1000
+  assert(
+    plan.actualFrameCount >= 5 && plan.actualFrameCount <= 20,
+    `${ids} 補完只有 ${plan.actualFrameCount} 實幀`,
+  )
+  assert([1, 2, 3, 4].includes(seconds), `${ids} 補完長度是 ${seconds} 秒`)
+  assert(seconds * fixed.playCount <= 4, `${ids} 補完總播放超過 4 秒`)
+  assert(
+    plan.frames.every((frame) => frame.delayMs % 10 === 0),
+    `${ids} 補完有非 10ms 整數倍的延遲`,
+  )
+  assert.equal(
+    validateForLine({
+      target: 'sticker',
+      width: fixed.exportWidth,
+      height: fixed.exportHeight,
+      plan,
+      numPlays: fixed.playCount,
+      format: fixed.format,
+    }).filter(({ level }) => level === 'error').length,
+    0,
+    `${ids} 補完後仍有 LINE 規格錯誤`,
+  )
+}
 const fixedOne = fix([1])
 assert.equal(fixedOne.slots.length, 1)
 assert(fixedOne.unresolved.some((message) => message.includes('只有一種畫面')))
@@ -251,13 +336,12 @@ const twitchFix = autoFixForLine({
   target: 'twitchEmoteAnimated',
   canvasWidth: 360,
   canvasHeight: 360,
-  slots: Array.from({ length: 72 }, (_, layerId) => ({ layerId })),
+  resolvedIds: Array.from({ length: 72 }, (_, layerId) => layerId),
   fps: 60,
   playCount: 0,
   exportWidth: 112,
   exportHeight: 112,
   format: 'gif',
-  identicalToPrev: Array(72).fill(false),
 })
 assert.deepEqual([twitchFix.slots.length, twitchFix.fps], [60, 30])
 

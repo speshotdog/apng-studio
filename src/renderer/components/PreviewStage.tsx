@@ -1,47 +1,19 @@
 import { useEffect, useRef } from 'react'
-import { ensureBitmap } from '../compose.js'
+import { drawFrame, ensureBitmap, frameLayerIds } from '../compose.js'
 import { useStore } from '../state/store.js'
 export function PreviewStage(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const state = useStore()
-  const {
-    doc,
-    playhead,
-    slots,
-    fps,
-    playing,
-    previewLoop,
-    exportWidth,
-    exportHeight,
-    scaleMode,
-    zoom,
-    offsetX,
-    offsetY,
-    resolveSlot,
-    set,
-  } = state
+  const { doc, playhead, fps, playing, previewLoop, exportWidth, exportHeight, scaleMode, set } =
+    state
+  const frames = state.frameCount()
   const draw = async (index: number): Promise<void> => {
     const canvas = canvasRef.current
     if (!canvas || !doc) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    const id = resolveSlot(index)
-    if (id !== null) {
-      const bitmap = await ensureBitmap(id)
-      ctx.imageSmoothingEnabled = scaleMode === 'smooth'
-      if (scaleMode === 'smooth') ctx.imageSmoothingQuality = 'high'
-      const scale = Math.min(canvas.width / bitmap.width, canvas.height / bitmap.height) * zoom
-      const width = bitmap.width * scale
-      const height = bitmap.height * scale
-      ctx.drawImage(
-        bitmap,
-        (canvas.width - width) / 2 + offsetX,
-        (canvas.height - height) / 2 + offsetY,
-        width,
-        height,
-      )
-    }
+    await Promise.all(frameLayerIds(index).map((id) => ensureBitmap(id).catch(() => undefined)))
+    drawFrame(ctx, index, canvas.width, canvas.height, scaleMode)
   }
   useEffect(() => {
     void draw(playhead)
@@ -49,16 +21,14 @@ export function PreviewStage(): React.JSX.Element {
     playhead,
     doc,
     state.bitmaps,
+    state.tracks,
     exportWidth,
     exportHeight,
     scaleMode,
-    zoom,
-    offsetX,
-    offsetY,
     state.visibility,
   ])
   useEffect(() => {
-    if (!playing || !slots.length) return
+    if (!playing || !frames) return
     let raf = 0,
       last = performance.now(),
       accumulated = 0,
@@ -70,10 +40,10 @@ export function PreviewStage(): React.JSX.Element {
       if (accumulated >= duration) {
         accumulated %= duration
         const current = useStore.getState().playhead
-        if (current >= slots.length - 1) {
+        if (current >= frames - 1) {
           loops++
           if (!previewLoop && loops >= 1) {
-            set({ playing: false, playhead: slots.length - 1 })
+            set({ playing: false, playhead: frames - 1 })
             return
           }
           set({ playhead: 0 })
@@ -83,7 +53,7 @@ export function PreviewStage(): React.JSX.Element {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [playing, fps, previewLoop, slots.length])
+  }, [playing, fps, previewLoop, frames])
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).matches('input, textarea, select')) return
@@ -93,16 +63,13 @@ export function PreviewStage(): React.JSX.Element {
       } else if (e.key === 'ArrowLeft')
         set({ playing: false, playhead: Math.max(0, useStore.getState().playhead - 1) })
       else if (e.key === 'ArrowRight')
-        set({
-          playing: false,
-          playhead: Math.min(slots.length - 1, useStore.getState().playhead + 1),
-        })
+        set({ playing: false, playhead: Math.min(frames - 1, useStore.getState().playhead + 1) })
       else if (e.key === 'Home') set({ playing: false, playhead: 0 })
-      else if (e.key === 'End') set({ playing: false, playhead: slots.length - 1 })
+      else if (e.key === 'End') set({ playing: false, playhead: frames - 1 })
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [slots.length])
+  }, [frames])
   return (
     <section className="preview">
       <div className="stage">
@@ -121,14 +88,14 @@ export function PreviewStage(): React.JSX.Element {
               aria-label={`輸出預覽 ${exportWidth} × ${exportHeight}`}
             />
             <small>
-              {exportWidth} × {exportHeight}　縮放 {Math.round(zoom * 100)}%
+              {exportWidth} × {exportHeight}
             </small>
           </div>
         ) : (
           <div className="welcome">
             <i>AP</i>
             <h2>把動作留在畫布上</h2>
-            <p>拖入 .clip，或從「檔案」選單開啟</p>
+            <p>拖入 .clip／.procreate，或從「檔案」選單開啟</p>
           </div>
         )}
       </div>
@@ -148,7 +115,7 @@ export function PreviewStage(): React.JSX.Element {
         </button>
         <button
           onKeyDown={(e) => e.currentTarget.blur()}
-          onClick={() => set({ playing: false, playhead: slots.length - 1 })}
+          onClick={() => set({ playing: false, playhead: frames - 1 })}
         >
           ⏭
         </button>
@@ -161,7 +128,7 @@ export function PreviewStage(): React.JSX.Element {
           ↻
         </button>
         <span>
-          第 {playhead + 1} / {slots.length} 格
+          第 {playhead + 1} / {frames} 格
         </span>
         <em>{fps} FPS</em>
       </div>

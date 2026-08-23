@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App.js'
-import { composeFrame, ensureBitmap } from './compose.js'
+import { allLayerIds, composeFrame, ensureBitmap } from './compose.js'
 import { exportTo } from './export.js'
 import { packImportMessage } from './packMessage.js'
 import { useStore } from './state/store.js'
@@ -36,11 +36,7 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
       document.querySelectorAll<HTMLCanvasElement>('.thumb[data-layer-id]').forEach((thumb) => {
         if (thumb.dataset.thumbLoaded === 'false') ids.add(Number(thumb.dataset.layerId))
       })
-      const state = useStore.getState()
-      state.slots.forEach((_, index) => {
-        const id = state.resolveSlot(index)
-        if (id !== null) ids.add(id)
-      })
+      allLayerIds().forEach((id) => ids.add(id))
       await Promise.all([...ids].map(ensureBitmap))
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
@@ -48,6 +44,25 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     },
     exportTo,
     composeFrame,
+    // 影格與畫面調整改成掛在軌道上；煙霧測試沿用單軌語意，靠這幾個小工具轉接。
+    getSlots: () => useStore.getState().tracks[useStore.getState().activeTrack]!.slots,
+    setSlots: (slots: { layerId: number | null }[]) => {
+      const state = useStore.getState()
+      state.set({
+        tracks: state.tracks.map((track, index) =>
+          index === state.activeTrack ? { ...track, slots } : track,
+        ),
+      })
+    },
+    getAdjust: () => {
+      const state = useStore.getState()
+      const { zoom, offsetX, offsetY } = state.tracks[state.activeTrack]!
+      return { zoom, offsetX, offsetY }
+    },
+    setAdjust: (patch: { zoom?: number; offsetX?: number; offsetY?: number }) => {
+      const state = useStore.getState()
+      state.setTrack(state.activeTrack, patch)
+    },
     snapshotStore: () => {
       const {
         doc: _doc,
@@ -58,6 +73,18 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
         setSlot: _setSlot,
         resolveSlot: _resolveSlot,
         importCspTimeline: _import,
+        toast: _toast,
+        dismissToast: _dismissToast,
+        reset: _reset,
+        frameCount: _frameCount,
+        resizeFrames: _resizeFrames,
+        setTrack: _setTrack,
+        addTrack: _addTrack,
+        removeTrack: _removeTrack,
+        moveTrack: _moveTrack,
+        commit: _commit,
+        undo: _undo,
+        redo: _redo,
         visibility,
         ...serializable
       } = useStore.getState()

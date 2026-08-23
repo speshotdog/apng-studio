@@ -146,10 +146,10 @@ async function run(): Promise<void> {
       const element = document.querySelector('.line-targets'); element.value = value
       element.dispatchEvent(new Event('change', { bubbles: true })); await smoke.waitIdle()
     }
-    store.getState().set({ lineTarget: 'sticker', targetSettings: {}, fps: 17, playCount: 3, zoom: 0.8, exportWidth: 300, exportHeight: 270 })
+    store.getState().set({ lineTarget: 'sticker', targetSettings: {}, fps: 17, playCount: 3, exportWidth: 300, exportHeight: 270 }); smoke.setAdjust({ zoom: 0.8 })
     await smoke.waitIdle()
     const before = store.getState()
-    const original = { fps: before.fps, playCount: before.playCount, zoom: before.zoom, width: before.exportWidth, height: before.exportHeight }
+    const original = { fps: before.fps, playCount: before.playCount, zoom: smoke.getAdjust().zoom, width: before.exportWidth, height: before.exportHeight }
     const errorsBefore = document.querySelectorAll('.issues .error').length
     await select('twitchEmoteAnimated'); const twitch = store.getState()
     await select('youtubeEmoji'); const youtube = store.getState()
@@ -157,7 +157,7 @@ async function run(): Promise<void> {
     return {
       original, twitch: { fps: twitch.fps, playCount: twitch.playCount },
       youtube: { format: youtube.format, staticFrame: youtube.staticFrame },
-      restored: { fps: restored.fps, playCount: restored.playCount, zoom: restored.zoom, width: restored.exportWidth, height: restored.exportHeight },
+      restored: { fps: restored.fps, playCount: restored.playCount, zoom: smoke.getAdjust().zoom, width: restored.exportWidth, height: restored.exportHeight },
       errorsBefore, errorsAfter: document.querySelectorAll('.issues .error').length,
     }
   })()`)
@@ -170,24 +170,57 @@ async function run(): Promise<void> {
 
   const nonSquareMemory = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, store = smoke.store, originalDoc = store.getState().doc
-    store.getState().set({ doc: { ...originalDoc, canvas: { width: 400, height: 300 } }, lineTarget: 'sticker', targetSettings: {}, zoom: 1 })
+    store.getState().set({ doc: { ...originalDoc, canvas: { width: 400, height: 300 } }, lineTarget: 'sticker', targetSettings: {} }); smoke.setAdjust({ zoom: 1 })
     await smoke.waitIdle()
     const select = async (value) => { const element = document.querySelector('.line-targets'); element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })); await smoke.waitIdle() }
-    await select('plurkEmoticon'); const plurkZoom = store.getState().zoom
-    await select('sticker'); const stickerZoom = store.getState().zoom
+    await select('plurkEmoticon'); const plurkZoom = smoke.getAdjust().zoom
+    await select('sticker'); const stickerZoom = smoke.getAdjust().zoom
     store.getState().set({ doc: originalDoc }); await smoke.waitIdle()
     return { plurkZoom, stickerZoom }
   })()`)
   assert.ok(nonSquareMemory.plurkZoom > 1)
   assert.equal(nonSquareMemory.stickerZoom, 1)
 
+  const saveProgress = await window.webContents.executeJavaScript(`(async () => {
+    const store = window.__smoke.store
+    const before = (await window.api.listProjects()).length
+    document.querySelector('.project-heading button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const input = document.querySelector('.text-prompt input')
+    if (!input) return { error: '沒有跳出輸入名稱的對話框（Electron 不支援 window.prompt）' }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, 'smoke-progress')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('.text-prompt .prompt-confirm').click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const saved = await window.api.listProjects()
+    return {
+      before,
+      after: saved.length,
+      named: saved.some((item) => item.name === 'smoke-progress'),
+      hasTracks: Boolean(saved.find((item) => item.name === 'smoke-progress')?.state?.tracks?.length),
+      dirty: store.getState().dirty,
+      toast: document.querySelector('.toast-success p')?.textContent ?? '',
+    }
+  })()`)
+  assert.equal(saveProgress.error, undefined, saveProgress.error)
+  assert.equal(saveProgress.after, saveProgress.before + 1, '儲存進度沒有真的寫進去')
+  assert.ok(saveProgress.named, '存下來的進度名稱不對')
+  assert.ok(saveProgress.hasTracks, '存下來的進度沒有帶到圖層軌道')
+  assert.equal(saveProgress.dirty, false, '存檔後不應再被視為有未存檔變更')
+  assert.match(saveProgress.toast, /已儲存進度/)
+  await window.webContents.executeJavaScript(
+    `window.api.listProjects().then((list) => Promise.all(list.filter((item) => item.name === 'smoke-progress').map((item) => window.api.deleteProject(item.id))))`,
+  )
+
   const badPath = join(outputDir, 'broken.clip')
   await writeFile(badPath, (await readFile(samplePath)).subarray(0, 5000))
   const badClip = await window.webContents.executeJavaScript(`(async () => {
     const before = window.__smoke.store.getState().doc.filePath
+    window.__smoke.store.getState().set({ dirty: false })
     await window.__smoke.openClipUi(${JSON.stringify(badPath)})
     await window.__smoke.waitIdle()
-    return { before, after: window.__smoke.store.getState().doc.filePath, error: document.querySelector('.toast')?.textContent ?? '', root: Boolean(document.querySelector('#root .app')) }
+    return { before, after: window.__smoke.store.getState().doc.filePath, error: document.querySelector('.toast-error p')?.textContent ?? '', root: Boolean(document.querySelector('#root .app')) }
   })()`)
   assert.equal(badClip.after, badClip.before, '損壞檔案不可取代原文件')
   assert.equal(badClip.root, true, '損壞檔案後 app 不可白畫面')
@@ -235,7 +268,7 @@ async function run(): Promise<void> {
     const stats = [...document.querySelectorAll('.stats b')].map((node) => node.textContent)
     let opaquePixels = 0
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 0) opaquePixels++
-    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: state.slots, inheritedId: state.resolveSlot(3), sourceId: state.slots[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
+    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: smoke.getSlots(), inheritedId: state.resolveSlot(3), sourceId: smoke.getSlots()[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
   })()`)) as SmokeSnapshot
 
   assert.deepEqual(snapshot.celNames, ['1', '1a', '1b', '2', '3', '4'])
@@ -247,16 +280,16 @@ async function run(): Promise<void> {
   assert.equal(snapshot.timelineFrameCount, 8)
   assert.ok(snapshot.opaquePixels > 0, '預覽 canvas 不可全透明')
   const controls = await window.webContents.executeJavaScript(`(async () => {
-    const store = window.__smoke.store
+    const smoke = window.__smoke, store = smoke.store
     const beforePlayCount = store.getState().playCount
-    const originalSlots = store.getState().slots
+    const originalSlots = smoke.getSlots()
     document.querySelector('.transport button[title="循環預覽"]').click()
     const loop = store.getState().previewLoop
     store.getState().set({ selectedSlot: 7, playhead: 7 })
     await window.__smoke.waitIdle()
-    document.querySelectorAll('.timeline-tools button')[1].click()
+    document.querySelector('.timeline-tools .frame-remove').click()
     const shrunk = store.getState()
-    store.getState().set({ slots: originalSlots, selectedSlot: 0, playhead: 0, previewLoop: true })
+    smoke.setSlots(originalSlots); store.getState().set({ selectedSlot: 0, playhead: 0, previewLoop: true })
     return { beforePlayCount, afterPlayCount: store.getState().playCount, loop, selectedSlot: shrunk.selectedSlot, playhead: shrunk.playhead }
   })()`)
   assert.equal(controls.afterPlayCount, controls.beforePlayCount, '預覽循環不可改變匯出播放次數')
@@ -342,7 +375,7 @@ async function run(): Promise<void> {
     await window.__smoke.waitIdle()
     const state = window.__smoke.store.getState()
     const result = await window.__smoke.exportTo(${JSON.stringify(plurkPath)})
-    return { result, width: state.exportWidth, height: state.exportHeight, format: state.format, zoom: state.zoom }
+    return { result, width: state.exportWidth, height: state.exportHeight, format: state.format, zoom: window.__smoke.getAdjust().zoom }
   })()`)
   assert.equal(plurk.result.ok, true, plurk.result.error)
   assert.deepEqual(
@@ -431,7 +464,7 @@ async function run(): Promise<void> {
     const first = window.__smoke.store.getState()
     const warning = [...document.querySelectorAll('.issues .warning')].some((node) => node.textContent.includes('0.4 秒'))
     const cels = window.__smoke.getAnimationCels()
-    window.__smoke.store.getState().set({ slots: cels.map((cel) => ({ layerId: cel.id })), fps: 6, playCount: 4, format: 'apng' })
+    window.__smoke.setSlots(cels.map((cel) => ({ layerId: cel.id }))); window.__smoke.store.getState().set({ fps: 6, playCount: 4, format: 'apng' })
     await window.__smoke.waitIdle()
     const state = window.__smoke.store.getState()
     return { width: state.exportWidth, height: state.exportHeight, resizeMs, warning, errors: document.querySelectorAll('.issues .error').length, pass: document.querySelector('.issues .pass')?.textContent ?? '' }
@@ -473,9 +506,9 @@ async function run(): Promise<void> {
 
   await window.webContents.executeJavaScript(`(() => {
     const smoke = window.__smoke
-    smoke.store.getState().set({ slots: Array.from({ length: 8 }, () => ({ layerId: null })), playCount: 4, format: 'apng' })
+    smoke.setSlots(Array.from({ length: 8 }, () => ({ layerId: null }))); smoke.store.getState().set({ playCount: 4, format: 'apng' })
     window.confirm = () => true
-    document.querySelectorAll('.timeline-tools button')[2].click()
+    document.querySelector('.timeline-tools .import-timeline').click()
   })()`)
   await new Promise((resolve) => setTimeout(resolve, 100))
   await window.webContents.executeJavaScript(
@@ -488,7 +521,7 @@ async function run(): Promise<void> {
     const cels = smoke.getAnimationCels()
     const stats = [...document.querySelectorAll('.stats b')].map((node) => node.textContent)
     return {
-      slots: state.slots,
+      slots: window.__smoke.getSlots(),
       fps: state.fps,
       cel1: cels.find((cel) => cel.name === '1').id,
       cel1a: cels.find((cel) => cel.name === '1a').id,
@@ -528,9 +561,9 @@ async function run(): Promise<void> {
   const adjustment = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke
     const store = smoke.store
-    store.getState().set({ playhead: 0, selectedSlot: 0, exportWidth: 270, exportHeight: 270, zoom: 1, offsetX: 0, offsetY: 0 })
+    store.getState().set({ playhead: 0, selectedSlot: 0, exportWidth: 270, exportHeight: 270 }); smoke.setAdjust({ zoom: 1, offsetX: 0, offsetY: 0 })
     await smoke.waitIdle()
-    const pixels = (zoom, offsetX = 0) => smoke.composeFrame(0, 270, 270, 'smooth', { zoom, offsetX, offsetY: 0 })
+    const pixels = (zoom, offsetX = 0) => { smoke.setAdjust({ zoom, offsetX, offsetY: 0 }); return smoke.composeFrame(0, 270, 270, 'smooth') }
     const baseline = pixels(1)
     const implicit = smoke.composeFrame(0, 270, 270, 'smooth')
     const stats = (rgba) => {
@@ -566,7 +599,7 @@ async function run(): Promise<void> {
   assert.equal(controls11.high, 60)
   assert.equal(controls11.low, 1)
   await window.webContents.executeJavaScript(
-    `(async () => { const s = window.__smoke.store.getState(); const c = window.__smoke.getAnimationCels(); s.set({ slots: c.map((x) => ({layerId:x.id})), fps: 6, playCount: 4, lineTarget: 'emoji', exportWidth: 180, exportHeight: 180, format: 'apng' }); await window.__smoke.waitIdle() })()`,
+    `(async () => { const s = window.__smoke.store.getState(); const c = window.__smoke.getAnimationCels(); window.__smoke.setSlots(c.map((x) => ({layerId:x.id}))); s.set({ fps: 6, playCount: 4, lineTarget: 'emoji', exportWidth: 180, exportHeight: 180, format: 'apng' }); await window.__smoke.waitIdle() })()`,
   )
   await assertCaptureState({
     fps: 6,
@@ -579,13 +612,13 @@ async function run(): Promise<void> {
 
   const autofixUi = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
-    state.set({ mode: 'animation', slots: cels.slice(0, 4).map((cel) => ({ layerId: cel.id })), fps: 20, exportWidth: 360, exportHeight: 360, playCount: 1, lineTarget: 'sticker', format: 'apng' })
+    window.__smoke.setSlots(cels.slice(0, 4).map((cel) => ({ layerId: cel.id }))); state.set({ mode: 'animation', fps: 20, exportWidth: 360, exportHeight: 360, playCount: 1, lineTarget: 'sticker', format: 'apng' })
     window.confirm = () => true
     await smoke.waitIdle()
     document.querySelector('.autofix-button').click()
     await new Promise((resolve) => setTimeout(resolve, 100)); await smoke.waitIdle()
     const after = smoke.store.getState()
-    return { slots: after.slots.length, fps: after.fps, width: after.exportWidth, height: after.exportHeight, plays: after.playCount, errors: document.querySelectorAll('.issues .error').length }
+    return { slots: window.__smoke.getSlots().length, fps: after.fps, width: after.exportWidth, height: after.exportHeight, plays: after.playCount, errors: document.querySelectorAll('.issues .error').length }
   })()`)
   assert.deepEqual(autofixUi, { slots: 6, fps: 6, width: 270, height: 270, plays: 4, errors: 0 })
   await assertCaptureState({
@@ -605,9 +638,15 @@ async function run(): Promise<void> {
     const target = document.querySelector('.line-targets'); target.value = 'youtubeEmoji'; target.dispatchEvent(new Event('change', { bubbles: true }))
     await window.__smoke.waitIdle()
     window.__smoke.store.getState().set({ staticFrame: 2, gifColors: 64 })
-    window.prompt = () => 'Smoke 快照'; window.confirm = () => true
+    window.confirm = () => true
     document.querySelector('.project-heading button').click()
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const input = document.querySelector('.text-prompt input')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, 'Smoke 快照')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('.text-prompt .prompt-confirm').click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
     const saved = await window.api.listProjects()
     window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
     document.querySelector('.project-row').click()
@@ -621,10 +660,10 @@ async function run(): Promise<void> {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
     const results = []
     for (const frameCount of [1, 120]) for (const zoom of [0.2, 4]) for (const fps of [1, 60]) {
-      state.set({ mode: 'animation', slots: Array.from({ length: frameCount }, (_, index) => ({ layerId: cels[index % cels.length].id })), playhead: 0, selectedSlot: 0, zoom, fps })
+      window.__smoke.setSlots(Array.from({ length: frameCount }, (_, index) => ({ layerId: cels[index % cels.length].id }))); state.set({ mode: 'animation', playhead: 0, selectedSlot: 0, fps }); window.__smoke.setAdjust({ zoom })
       await smoke.waitIdle()
       const canvas = document.querySelector('.stage canvas')
-      const values = [canvas.width, canvas.height, state.exportWidth, state.exportHeight, state.zoom, state.fps]
+      const values = [canvas.width, canvas.height, state.exportWidth, state.exportHeight, window.__smoke.getAdjust().zoom, state.fps]
       results.push({ width: canvas.width, height: canvas.height, finite: values.every(Number.isFinite) })
     }
     return results
@@ -642,9 +681,9 @@ async function run(): Promise<void> {
   await mkdir(emptyPackSource, { recursive: true })
   const emptyImport = await window.webContents.executeJavaScript(`(async () => {
     const result = await window.api.importPackFolder(${JSON.stringify(emptyPackSource)})
-    window.__smoke.store.getState().set({ mode: 'pack', packCells: result.cells, notice: window.__smoke.packImportMessage(result) })
+    window.__smoke.store.getState().set({ mode: 'pack', packCells: result.cells }); window.__smoke.store.getState().toast('info', window.__smoke.packImportMessage(result))
     await window.__smoke.waitIdle()
-    return { count: result.cells.length, notice: document.querySelector('.toast')?.textContent ?? '' }
+    return { count: result.cells.length, notice: document.querySelector('.toast-info p, .toast-success p')?.textContent ?? '' }
   })()`)
   assert.equal(emptyImport.count, 0)
   assert.match(emptyImport.notice, /沒有找到符合命名規則的圖片/)

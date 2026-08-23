@@ -2,8 +2,9 @@ import { app, BrowserWindow, Menu } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { registerIpc } from './ipc.js'
+import type { MenuCommand } from '../preload/api.js'
 let mainWindow: BrowserWindow | null = null
-function send(command: 'open' | 'export-apng' | 'export-gif' | 'settings'): void {
+function send(command: MenuCommand): void {
   mainWindow?.webContents.send('menu:command', command)
 }
 function argument(name: string): string | undefined {
@@ -15,6 +16,7 @@ async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    icon: join(__dirname, '../../assets/icon.png'),
     minWidth: 1024,
     minHeight: 640,
     show: !smokeClip,
@@ -62,7 +64,13 @@ app.whenReady().then(() => {
       {
         label: '檔案',
         submenu: [
-          { label: '開啟 .clip', accelerator: 'CmdOrCtrl+O', click: () => send('open') },
+          { label: '新專案', accelerator: 'CmdOrCtrl+N', click: () => send('new') },
+          {
+            label: '開啟檔案…（.clip / .procreate / .psd）',
+            accelerator: 'CmdOrCtrl+O',
+            click: () => send('open'),
+          },
+          { label: '草稿資料夾…', accelerator: 'CmdOrCtrl+D', click: () => send('drafts') },
           { type: 'separator' },
           { label: '匯出 APNG', accelerator: 'CmdOrCtrl+E', click: () => send('export-apng') },
           { label: '匯出 GIF', click: () => send('export-gif') },

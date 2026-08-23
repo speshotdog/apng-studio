@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ProjectSnapshot } from '../../project/types.js'
+import { askText } from '../prompt.js'
+import { applyEditorState, captureEditorState } from '../snapshot.js'
 import { useStore } from '../state/store.js'
 
 export function timestampName(now = new Date()): string {
@@ -20,60 +22,52 @@ function stateSnapshot(name: string, existing?: ProjectSnapshot): ProjectSnapsho
     clipPath: state.doc?.filePath ?? '',
     clipName: state.doc?.filePath.split(/[\\/]/).at(-1) ?? '',
     thumbnail,
-    state: {
-      slots: state.slots,
-      visibility: [...state.visibility],
-      fps: state.fps,
-      playCount: state.playCount,
-      format: state.format,
-      lineTarget: state.lineTarget,
-      exportWidth: state.exportWidth,
-      exportHeight: state.exportHeight,
-      lockAspect: state.lockAspect,
-      scaleMode: state.scaleMode,
-      mergeIdentical: state.mergeIdentical,
-      zoom: state.zoom,
-      offsetX: state.offsetX,
-      offsetY: state.offsetY,
-      staticFrame: state.staticFrame,
-      gifColors: state.gifColors,
-    },
+    state: captureEditorState(),
     pack: {
       target: state.packTarget,
       count: state.packCount,
-      cells: state.packCells.map(({ index, sourcePath, pngBase64 }) => ({
+      cells: state.packCells.map(({ index, sourcePath, pngBase64, editor }) => ({
         index,
         sourcePath,
         pngBase64,
+        editor,
       })),
     },
   }
 }
 
 export async function saveCurrentSnapshot(name: string): Promise<ProjectSnapshot[]> {
-  return window.api.saveProject(stateSnapshot(name))
+  const projects = await window.api.saveProject(stateSnapshot(name))
+  useStore.getState().set({ dirty: false })
+  return projects
 }
 
 export function ProjectPanel(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectSnapshot[]>([])
   const [expanded, setExpanded] = useState(false)
-  const set = useStore((state) => state.set)
+  const store = useStore()
   useEffect(() => {
     void window.api.listProjects().then(setProjects)
     void window.api.getSettings().then((settings) => setExpanded(settings.progressExpanded))
   }, [])
   const save = async (): Promise<void> => {
-    const name = prompt('進度名稱', timestampName())?.trim()
-    if (name) setProjects(await saveCurrentSnapshot(name))
+    const name = await askText('進度名稱', timestampName())
+    if (!name) return
+    try {
+      setProjects(await saveCurrentSnapshot(name))
+      store.toast('success', `已儲存進度「${name}」`)
+    } catch (error) {
+      store.toast('error', `儲存失敗：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   const load = async (snapshot: ProjectSnapshot): Promise<void> => {
     const current = useStore.getState()
-    if (current.doc && !confirm(`要載入「${snapshot.name}」嗎？尚未儲存的調整會遺失。`)) return
+    if (current.dirty && !confirm(`要載入「${snapshot.name}」嗎？尚未儲存的調整會遺失。`)) return
     let doc = snapshot.clipPath
       ? await window.api.openClip(snapshot.clipPath).catch(() => null)
       : null
     if (!doc) {
-      alert('找不到原始 .clip，請重新選擇檔案。')
+      store.toast('error', '找不到原始檔案，請重新選擇。')
       doc = await window.api.openClip()
     }
     if (!doc) return
@@ -84,26 +78,31 @@ export function ProjectPanel(): React.JSX.Element {
       node.children.forEach(visit)
     }
     visit(doc.tree)
-    const missing = snapshot.state.slots.flatMap(({ layerId }) =>
-      layerId !== null && !valid.has(layerId) ? [layerId] : [],
-    )
-    if (missing.length) alert(`部分圖層 ID 在新檔案中不存在：${[...new Set(missing)].join('、')}`)
+    applyEditorState(snapshot.state)
+    const missing = useStore
+      .getState()
+      .tracks.flatMap((track) =>
+        track.slots.flatMap(({ layerId }) =>
+          layerId !== null && !valid.has(layerId) ? [layerId] : [],
+        ),
+      )
     const packCells = snapshot.pack ? await window.api.hydratePackCells(snapshot.pack.cells) : []
-    set({
-      ...snapshot.state,
-      staticFrame: snapshot.state.staticFrame ?? 0,
-      gifColors: snapshot.state.gifColors ?? 256,
-      visibility: new Map(snapshot.state.visibility),
+    store.set({
       packTarget: snapshot.pack?.target ?? 'staticSticker',
       packCount: snapshot.pack?.count ?? 32,
       packCells,
-      notice: `已載入進度：${snapshot.name}`,
     })
+    store.toast(
+      missing.length ? 'info' : 'success',
+      missing.length
+        ? `已載入「${snapshot.name}」，但有圖層在新檔案中不存在：${[...new Set(missing)].join('、')}`
+        : `已載入進度：${snapshot.name}`,
+    )
   }
   return (
     <section className="project-panel">
       <div className="project-heading">
-        <button onClick={save}>儲存目前進度</button>
+        <button onClick={save}>儲存目前進度{store.dirty ? ' •' : ''}</button>
         <button
           className="project-toggle"
           aria-expanded={expanded}
@@ -140,7 +139,11 @@ export function ProjectPanel(): React.JSX.Element {
                     event.stopPropagation()
                     void window.api
                       .saveProject(stateSnapshot(project.name, project))
-                      .then(setProjects)
+                      .then((next) => {
+                        setProjects(next)
+                        store.set({ dirty: false })
+                        store.toast('success', `已覆寫「${project.name}」`)
+                      })
                   }}
                 >
                   覆寫
@@ -148,8 +151,9 @@ export function ProjectPanel(): React.JSX.Element {
                 <button
                   onClick={(event) => {
                     event.stopPropagation()
-                    const name = prompt('新名稱', project.name)
-                    if (name) void window.api.renameProject(project.id, name).then(setProjects)
+                    void askText('新名稱', project.name).then((name) => {
+                      if (name) void window.api.renameProject(project.id, name).then(setProjects)
+                    })
                   }}
                 >
                   改名

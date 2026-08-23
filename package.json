@@ -14,14 +14,17 @@
     "typecheck": "tsc --noEmit",
     "verify": "tsx scripts/verify-clip.ts",
     "verify:codec": "tsx scripts/verify-codec.ts",
+    "verify:formats": "tsx scripts/verify-formats.ts",
     "verify:all": "npm run verify && npm run verify:codec",
     "smoke": "electron-vite build && node scripts/build-smoke.mjs && prettier --write scripts/smoke.js && electron scripts/smoke.js",
     "verify:full": "npm run verify:all && npm run smoke",
     "smoke:packaged": "node scripts/smoke-packaged.mjs"
   },
   "dependencies": {
+    "ag-psd": "^31.0.2",
     "gifenc": "^1.0.3",
     "jszip": "^3.10.1",
+    "lz4js": "^0.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sql.js": "^1.14.2",
@@ -29,6 +32,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@types/lz4js": "^0.2.2",
     "@types/node": "^26.2.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",

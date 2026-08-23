@@ -47,6 +47,28 @@ export interface PublicSettings {
   giphyUsername: string
   encryptionAvailable: boolean
   progressExpanded: boolean
+  draftFolder: string
+}
+export type MenuCommand = 'open' | 'new' | 'drafts' | 'export-apng' | 'export-gif' | 'settings'
+/** 草稿資料夾裡的一個可開啟檔案。 */
+export interface DraftEntry {
+  filePath: string
+  name: string
+  kind: string
+  byteLength: number
+  modifiedAt: string
+}
+export interface DraftListing {
+  folder: string
+  entries: DraftEntry[]
+}
+/** 存進貼圖組時，主程序回傳的編碼結果。 */
+export interface PackEncoded {
+  pngBase64: string
+  width: number
+  height: number
+  byteLength: number
+  frameCount: number
 }
 export interface GiphyUploadResult {
   ok: boolean
@@ -88,6 +110,9 @@ export interface Api {
     cells: PackImportResult['cells'],
     target?: import('../codec/line.js').ExportTarget,
   ): Promise<ExportResult>
+  listDrafts(folder?: string): Promise<DraftListing | null>
+  pickDraftFolder(): Promise<string | null>
+  encodeForPack(payload: ExportPayload): Promise<PackEncoded>
   getSettings(): Promise<PublicSettings>
   setGiphy(key: string, username: string): Promise<{ ok: boolean; error?: string }>
   clearGiphy(): Promise<void>
@@ -95,7 +120,5 @@ export interface Api {
   setProgressExpanded(expanded: boolean): Promise<void>
   uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
   openExternal(url: string): Promise<void>
-  onMenuCommand(
-    callback: (command: 'open' | 'export-apng' | 'export-gif' | 'settings') => void,
-  ): () => void
+  onMenuCommand(callback: (command: MenuCommand) => void): () => void
 }

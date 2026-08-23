@@ -1,25 +1,40 @@
 import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
-import { readFile, readdir, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
 import JSZip from 'jszip'
 import UPNG from 'upng-js'
-import { parseClip, type ClipDocument, type ClipLayer } from '../clip/index.js'
+import {
+  isSupported,
+  parseSource,
+  SUPPORTED,
+  type SourceDocument,
+  type SourceLayer,
+} from '../formats/index.js'
 import { encodeApng, verifyApng } from '../codec/apng.js'
 import { encodeGif } from '../codec/gif.js'
 import { encodePng } from '../codec/png.js'
-import type { ClipSummary, ExportPayload, ExportResult, LayerNode } from '../preload/api.js'
+import type {
+  ClipSummary,
+  DraftListing,
+  ExportPayload,
+  ExportResult,
+  LayerNode,
+  PackEncoded,
+} from '../preload/api.js'
 import type { PackImportCell, PackImportResult, ProjectSnapshot } from '../project/types.js'
 import type { ExportTarget } from '../codec/line.js'
 import { deleteProject, listProjects, renameProject, saveProject } from './projects.js'
 import { testGiphyKey, uploadToGiphy } from './giphy.js'
 import {
   clearGiphy,
+  getDraftFolder,
   getGiphyKey,
   getPublicSettings,
+  setDraftFolder,
   setGiphy,
   setProgressExpanded,
 } from './settings.js'
-let current: ClipDocument | null = null
+let current: SourceDocument | null = null
 let currentPath = ''
 const rendered = new Map<string, { width: number; height: number; rgba: Uint8Array }>()
 /** 匯出預設檔名：月日_時分，例如 8/23 03:19 → 0823_0319 */
@@ -171,7 +186,7 @@ function visibilityKey(layerId: number, overrides: Array<[number, boolean]>): st
     .map(([id, visible]) => `${id}:${visible ? 1 : 0}`)
     .join(',')}`
 }
-function node(layer: ClipLayer): LayerNode {
+function node(layer: SourceLayer): LayerNode {
   return {
     id: layer.id,
     name: layer.name,
@@ -368,12 +383,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     if (!filePath) {
       const picked = await dialog.showOpenDialog({
         properties: ['openFile'],
-        filters: [{ name: 'Clip Studio Paint', extensions: ['clip'] }],
+        filters: [
+          { name: '所有支援的格式', extensions: ['clip', 'procreate', 'psd', 'psb'] },
+          { name: 'Clip Studio Paint', extensions: ['clip'] },
+          { name: 'Procreate', extensions: ['procreate'] },
+          { name: 'Photoshop', extensions: ['psd', 'psb'] },
+        ],
       })
       if (picked.canceled || !picked.filePaths[0]) return null
       filePath = picked.filePaths[0]
     }
-    const doc = await parseClip(await readFile(filePath))
+    const doc = await parseSource(filePath, await readFile(filePath))
     current = doc
     currentPath = filePath
     rendered.clear()
@@ -386,7 +406,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
   ipcMain.handle('clip:openBuffer', async (_event, bytes: Uint8Array): Promise<ClipSummary> => {
-    const doc = await parseClip(Buffer.from(bytes))
+    const doc = await parseSource('dropped.clip', Buffer.from(bytes))
     current = doc
     currentPath = ''
     rendered.clear()
@@ -444,4 +464,43 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     writeMultiExport(getWindow, folder, payloads),
   )
   ipcMain.handle('export:saveMultiZip', (_event, payloads) => saveMultiZip(getWindow, payloads))
+  ipcMain.handle('pack:encode', (_event, payload: ExportPayload): PackEncoded => {
+    const encoded = encodeExport(payload)
+    return {
+      pngBase64: Buffer.from(encoded.bytes).toString('base64'),
+      width: payload.width,
+      height: payload.height,
+      byteLength: encoded.byteLength,
+      frameCount: encoded.info?.numFrames ?? 1,
+    }
+  })
+  ipcMain.handle('drafts:pick', async (): Promise<string | null> => {
+    const picked = await dialog.showOpenDialog(getWindow() ?? (undefined as never), {
+      properties: ['openDirectory'],
+      defaultPath: (await getDraftFolder()) || undefined,
+    })
+    if (picked.canceled || !picked.filePaths[0]) return null
+    await setDraftFolder(picked.filePaths[0])
+    return picked.filePaths[0]
+  })
+  ipcMain.handle('drafts:list', async (_event, folder?: string): Promise<DraftListing | null> => {
+    const target = folder ?? (await getDraftFolder())
+    if (!target) return { folder: '', entries: [] }
+    if (folder) await setDraftFolder(folder)
+    const entries = []
+    for (const entry of await readdir(target, { withFileTypes: true })) {
+      if (!entry.isFile() || !isSupported(entry.name)) continue
+      const filePath = join(target, entry.name)
+      const info = await stat(filePath)
+      entries.push({
+        filePath,
+        name: entry.name,
+        kind: SUPPORTED[extname(entry.name).toLowerCase()] ?? '',
+        byteLength: info.size,
+        modifiedAt: info.mtime.toISOString(),
+      })
+    }
+    entries.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+    return { folder: target, entries }
+  })
 }

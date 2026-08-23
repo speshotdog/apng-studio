@@ -96,8 +96,11 @@ function frameControl(
   view.setUint32(8, height)
   view.setUint32(12, 0)
   view.setUint32(16, 0)
-  view.setUint16(20, delayMs)
-  view.setUint16(22, 1000)
+  // 10 毫秒的整數倍就用 1/100 秒當分母寫檔。LINE 的驗證器把延遲換算成 1/100 秒，
+  // 用 delay_den=1000 時尾數會被截掉，總長度算出來就不再是剛好 1/2/3/4 秒。
+  const centiseconds = delayMs % 10 === 0
+  view.setUint16(20, centiseconds ? delayMs / 10 : delayMs)
+  view.setUint16(22, centiseconds ? 100 : 1000)
   data[24] = 0
   data[25] = 0
   return data

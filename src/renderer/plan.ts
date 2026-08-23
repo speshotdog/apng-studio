@@ -1,4 +1,5 @@
 import type { ApngFrame, ApngOptions, ApngPlan } from '../codec/apng.js'
+import { frameDelays } from '../codec/timing.js'
 function equal(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
@@ -23,15 +24,14 @@ export function planFrames(frames: ApngFrame[], options: ApngOptions): ApngPlan 
     firstFrameRgba: frames[0]?.rgba,
   }
 }
+/** 影格識別鍵可以是圖層 id，也可以是多軌合成後的組合鍵；只比對是否相同。 */
 export function planFromSlots(
-  resolvedIds: Array<number | null>,
+  resolvedIds: Array<string | number | null>,
   fps: number,
   mergeIdentical: boolean,
 ): ApngPlan {
-  const frames = resolvedIds.map((id, index) => ({
-    id,
-    delayMs: Math.round(((index + 1) * 1000) / fps) - Math.round((index * 1000) / fps),
-  }))
+  const delays = resolvedIds.length ? frameDelays(resolvedIds.length, fps) : []
+  const frames = resolvedIds.map((id, index) => ({ id, delayMs: delays[index]! }))
   const planned: ApngPlan['frames'] = []
   frames.forEach((frame, index) => {
     const previous = frames[index - 1]

@@ -6,7 +6,9 @@ directories:
 files:
   - out/**
   - package.json
+  - assets/icon.png
 win:
+  icon: assets/icon.ico
   target:
     - portable
     - nsis

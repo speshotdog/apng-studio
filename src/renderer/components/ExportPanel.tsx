@@ -6,6 +6,7 @@ import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
 import { useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
+import { captureEditorState } from '../snapshot.js'
 import { saveCurrentSnapshot, timestampName } from './ProjectPanel.js'
 
 const clampFps = (value: number): number =>
@@ -18,7 +19,8 @@ export function ExportPanel(props: {
   const state = useStore()
   const {
     doc,
-    slots,
+    tracks,
+    activeTrack,
     fps,
     exportWidth: width,
     exportHeight: height,
@@ -27,20 +29,34 @@ export function ExportPanel(props: {
     mergeIdentical,
     scaleMode,
     lineTarget,
-    zoom,
-    offsetX,
-    offsetY,
     set,
+    toast,
   } = state
+  const track = tracks[activeTrack] ?? tracks[0]!
+  const frames = state.frameCount()
   const [result, setResult] = useState<ExportResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [upload, setUpload] = useState<{ bytes: Uint8Array; tags: string } | null>(null)
   const [giphyResult, setGiphyResult] = useState<GiphyUploadResult | null>(null)
   const targetSpec = EXPORT_TARGETS[lineTarget]
-  const resolvedIds = useMemo(() => slots.map((_, i) => state.resolveSlot(i)), [slots])
+  const resolvedIds = useMemo(
+    () => Array.from({ length: frames }, (_, i) => state.resolveSlot(i)),
+    [tracks, activeTrack, frames],
+  )
+  /**
+   * 規格檢查看的是「合成後的整張畫面」，不是單一軌道。多軌時只要有任何一軌換圖，
+   * 該格就是新的一幀，所以拿全部軌道串起來當比對鍵。
+   */
+  const compositeKeys = useMemo(
+    () =>
+      Array.from({ length: frames }, (_, i) =>
+        tracks.map((_, trackIndex) => state.resolveSlot(i, trackIndex) ?? 'x').join('/'),
+      ),
+    [tracks, frames],
+  )
   const plan = useMemo(
-    () => planFromSlots(resolvedIds, fps, mergeIdentical),
-    [resolvedIds, fps, mergeIdentical],
+    () => planFromSlots(compositeKeys, fps, mergeIdentical),
+    [compositeKeys, fps, mergeIdentical],
   )
   const issues = validateForLine({
     target: lineTarget,
@@ -53,8 +69,10 @@ export function ExportPanel(props: {
   })
   const errors = issues.filter((issue) => issue.level === 'error')
   const orderedIssues = [...errors, ...issues.filter((issue) => issue.level !== 'error')]
-  const dimensions = (w: number, h: number, unlock = false) =>
+  const dimensions = (w: number, h: number, unlock = false): void =>
     set({ exportWidth: w, exportHeight: h, ...(unlock ? { lockAspect: false } : {}) })
+  const adjust = (patch: Partial<{ zoom: number; offsetX: number; offsetY: number }>): void =>
+    state.setTrack(activeTrack, patch)
   const selectTarget = (target: ExportTarget): void => {
     const next = EXPORT_TARGETS[target]
     const currentSettings: TargetSettings = {
@@ -64,12 +82,12 @@ export function ExportPanel(props: {
       lockAspect: state.lockAspect,
       fps,
       playCount,
-      zoom,
-      offsetX,
-      offsetY,
       scaleMode,
       staticFrame: state.staticFrame,
       gifColors: state.gifColors,
+      zoom: track.zoom,
+      offsetX: track.offsetX,
+      offsetY: track.offsetY,
     }
     const remembered = state.targetSettings[target]
     const documentFps = doc?.timeline?.frameRate ?? 12
@@ -80,7 +98,6 @@ export function ExportPanel(props: {
       next.fixedSize?.width ?? Math.round((doc?.canvas.width ?? next.maxWidth) * sizeRatio)
     const defaultHeight =
       next.fixedSize?.height ?? Math.round((doc?.canvas.height ?? next.maxHeight) * sizeRatio)
-    const base = doc ? Math.min(48 / doc.canvas.width, 48 / doc.canvas.height) : 1
     const defaults: TargetSettings = {
       format: (target === 'twitchEmoteAnimated' || target === 'plurkEmoticon'
         ? 'gif'
@@ -98,27 +115,31 @@ export function ExportPanel(props: {
           : next.staticOnly || target === 'staticSticker'
             ? 1
             : 4,
-      zoom:
-        target === 'plurkEmoticon' && doc
-          ? Math.max(48 / doc.canvas.width, 48 / doc.canvas.height) / base
-          : 1,
-      offsetX: 0,
-      offsetY: 0,
       scaleMode: 'smooth',
       staticFrame: next.staticOnly ? state.playhead : 0,
       gifColors: 256,
+      // 噗浪只有 48×48，整張縮進去會看不清楚，預設先放大到「填滿」的程度讓人裁。
+      zoom:
+        target === 'plurkEmoticon' && doc
+          ? Math.max(48 / doc.canvas.width, 48 / doc.canvas.height) /
+            Math.min(48 / doc.canvas.width, 48 / doc.canvas.height)
+          : 1,
+      offsetX: 0,
+      offsetY: 0,
     }
+    const { zoom, offsetX, offsetY, ...rest } = remembered ?? defaults
     set({
-      ...(remembered ?? defaults),
+      ...rest,
       lineTarget: target,
       playing: false,
       targetSettings: { ...state.targetSettings, [lineTarget]: currentSettings },
     })
+    state.setTrack(activeTrack, { zoom, offsetX, offsetY })
   }
   const fill = (): void => {
     if (!doc) return
     const base = Math.min(width / doc.canvas.width, height / doc.canvas.height)
-    set({
+    adjust({
       zoom: Math.max(width / doc.canvas.width, height / doc.canvas.height) / base,
       offsetX: 0,
       offsetY: 0,
@@ -134,7 +155,12 @@ export function ExportPanel(props: {
     setBusy(true)
     setResult(null)
     try {
-      setResult(await exportTo())
+      const done = await exportTo()
+      setResult(done)
+      if (done.ok) toast('success', `匯出完成：${done.filePath?.split(/[\\/]/).at(-1) ?? ''}`)
+      else if (done.error !== '已取消匯出') toast('error', `匯出失敗：${done.error ?? '未知錯誤'}`)
+    } catch (error) {
+      toast('error', `匯出失敗：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
@@ -149,27 +175,64 @@ export function ExportPanel(props: {
           payload: await createExportPayload(size),
         })),
       )
-      setResult(await window.api.saveMultiZip(payloads))
+      const done = await window.api.saveMultiZip(payloads)
+      setResult(done)
+      toast(done.ok ? 'success' : 'error', done.ok ? 'ZIP 打包完成' : (done.error ?? '打包失敗'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const saveToPack = async (): Promise<void> => {
+    if (!doc) return
+    setBusy(true)
+    try {
+      const encoded = await window.api.encodeForPack(await createExportPayload())
+      const used = new Set(
+        state.packCells.flatMap((cell) => (typeof cell.index === 'number' ? [cell.index] : [])),
+      )
+      let slot = 1
+      while (used.has(slot) && slot <= state.packCount) slot++
+      if (slot > state.packCount) {
+        toast('error', `貼圖組 ${state.packCount} 格已滿，請先調整張數或清掉一格`)
+        return
+      }
+      set({
+        packCells: [
+          ...state.packCells,
+          {
+            index: slot,
+            sourcePath: '',
+            ...encoded,
+            editor: {
+              clipPath: doc.filePath,
+              clipName: doc.filePath.split(/[\\/]/).at(-1) ?? '',
+              state: captureEditorState(),
+            },
+          },
+        ],
+      })
+      toast('success', `已存入貼圖組第 ${String(slot).padStart(2, '0')} 格`)
+    } catch (error) {
+      toast('error', `存入貼圖組失敗：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
   }
   const durationTicks =
     EXPORT_TARGETS[lineTarget].allowedDurationsSec
-      ?.map((seconds) => Math.round(slots.length / seconds))
+      ?.map((seconds) => Math.round(frames / seconds))
       .filter((value) => value >= 1 && value <= 60) ?? []
   const autofix = doc
     ? autoFixForLine({
         target: lineTarget,
         canvasWidth: doc.canvas.width,
         canvasHeight: doc.canvas.height,
-        slots,
+        resolvedIds,
         fps,
         playCount,
         exportWidth: width,
         exportHeight: height,
         format,
-        identicalToPrev: resolvedIds.map((id, index) => index > 0 && id === resolvedIds[index - 1]),
       })
     : null
   const applyAutofix = async (): Promise<void> => {
@@ -178,7 +241,36 @@ export function ExportPanel(props: {
     const unresolved = autofix.unresolved.map((message) => `仍需處理：${message}`)
     if (!confirm(`將套用以下調整：\n\n${[...lines, ...unresolved].join('\n')}`)) return
     await saveCurrentSnapshot(`一鍵符合規範前_${timestampName()}`)
-    set({ ...autofix, notice: `已套用 ${autofix.changes.length} 項 LINE 規範調整` })
+    state.commit()
+    set({
+      tracks: tracks.map((item, index) =>
+        index === activeTrack
+          ? { ...item, slots: autofix.slots }
+          : {
+              ...item,
+              slots: Array.from(
+                { length: autofix.slots.length },
+                (_, i) => item.slots[i] ?? { layerId: null },
+              ),
+            },
+      ),
+      fps: autofix.fps,
+      playCount: autofix.playCount,
+      exportWidth: autofix.exportWidth,
+      exportHeight: autofix.exportHeight,
+      format: autofix.format,
+      mergeIdentical: autofix.mergeIdentical,
+      playhead: 0,
+      selectedSlot: 0,
+      selection: [],
+      playing: false,
+    })
+    toast(
+      autofix.unresolved.length ? 'info' : 'success',
+      autofix.unresolved.length
+        ? `已套用 ${autofix.changes.length} 項調整，但${autofix.unresolved[0]}`
+        : `已套用 ${autofix.changes.length} 項 ${targetSpec.platform} 規範調整`,
+    )
   }
   const prepareGiphy = async (): Promise<void> => {
     if (!props.settings?.hasGiphyKey) return props.openSettings()
@@ -191,6 +283,8 @@ export function ExportPanel(props: {
         maxColors: payload.gif?.maxColors ?? 256,
       })
       setUpload({ bytes: encoded.bytes, tags: '' })
+    } catch (error) {
+      toast('error', `GIF 轉檔失敗：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
@@ -198,10 +292,14 @@ export function ExportPanel(props: {
   const confirmGiphy = async (): Promise<void> => {
     if (!upload) return
     setBusy(true)
-    const result = await window.api.uploadGiphy({ gifBytes: upload.bytes, tags: upload.tags })
-    setGiphyResult(result)
+    const done = await window.api.uploadGiphy({ gifBytes: upload.bytes, tags: upload.tags })
+    setGiphyResult(done)
     setUpload(null)
     setBusy(false)
+    toast(
+      done.ok ? 'success' : 'error',
+      done.ok ? 'GIPHY 上傳成功' : `GIPHY 上傳失敗：${done.error ?? '未知錯誤'}`,
+    )
   }
   return (
     <aside className="panel export">
@@ -322,9 +420,9 @@ export function ExportPanel(props: {
                 set({ staticFrame: index, playhead: index, selectedSlot: index })
               }}
             >
-              {slots.map((slot, index) => (
+              {Array.from({ length: frames }, (_, index) => (
                 <option value={index} key={index}>
-                  第 {index + 1} 格{slot.layerId === null ? '（延續前格）' : ''}
+                  第 {index + 1} 格
                 </option>
               ))}
             </select>
@@ -332,50 +430,79 @@ export function ExportPanel(props: {
           </div>
         )}
         <div className="section adjustment">
-          <label className="label">畫面調整</label>
+          <label className="label">畫面調整 — {track.name}</label>
           <label>
-            縮放 <span>{Math.round(zoom * 100)}%</span>
+            縮放 <span>{Math.round(track.zoom * 100)}%</span>
             <input
               aria-label="縮放滑桿"
               type="range"
               min="20"
               max="400"
-              value={Math.round(zoom * 100)}
-              onInput={(e) => set({ zoom: Number(e.currentTarget.value) / 100 })}
+              value={Math.round(track.zoom * 100)}
+              onInput={(e) => adjust({ zoom: Number(e.currentTarget.value) / 100 })}
             />
             <input
               aria-label="縮放百分比"
               type="number"
               min="20"
               max="400"
-              value={Math.round(zoom * 100)}
+              value={Math.round(track.zoom * 100)}
               onChange={(e) =>
-                set({ zoom: Math.max(0.2, Math.min(4, Number(e.target.value) / 100)) })
+                adjust({ zoom: Math.max(0.2, Math.min(4, Number(e.target.value) / 100)) })
               }
             />
           </label>
-          <div className="offsets">
-            <label>
-              位移 X{' '}
-              <input
-                type="number"
-                value={offsetX}
-                onChange={(e) => set({ offsetX: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              位移 Y{' '}
-              <input
-                type="number"
-                value={offsetY}
-                onChange={(e) => set({ offsetY: Number(e.target.value) })}
-              />
-            </label>
-          </div>
+          <label>
+            位移 X <span>{track.offsetX} px</span>
+            <input
+              aria-label="位移 X 滑桿"
+              type="range"
+              min={-width}
+              max={width}
+              value={track.offsetX}
+              onInput={(e) => adjust({ offsetX: Number(e.currentTarget.value) })}
+            />
+            <input
+              aria-label="位移 X"
+              type="number"
+              value={track.offsetX}
+              onChange={(e) => adjust({ offsetX: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            位移 Y <span>{track.offsetY} px</span>
+            <input
+              aria-label="位移 Y 滑桿"
+              type="range"
+              min={-height}
+              max={height}
+              value={track.offsetY}
+              onInput={(e) => adjust({ offsetY: Number(e.currentTarget.value) })}
+            />
+            <input
+              aria-label="位移 Y"
+              type="number"
+              value={track.offsetY}
+              onChange={(e) => adjust({ offsetY: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            不透明度 <span>{Math.round(track.opacity * 100)}%</span>
+            <input
+              aria-label="不透明度滑桿"
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(track.opacity * 100)}
+              onInput={(e) =>
+                state.setTrack(activeTrack, { opacity: Number(e.currentTarget.value) / 100 })
+              }
+            />
+          </label>
           <div className="quick">
-            <button onClick={() => set({ zoom: 1, offsetX: 0, offsetY: 0 })}>符合</button>
+            <button onClick={() => adjust({ zoom: 1, offsetX: 0, offsetY: 0 })}>符合</button>
             <button onClick={fill}>填滿</button>
-            <button onClick={() => set({ zoom: 1, offsetX: 0, offsetY: 0 })}>重設</button>
+            <button onClick={() => adjust({ zoom: 1, offsetX: 0, offsetY: 0 })}>重設</button>
           </div>
           {lineTarget === 'plurkEmoticon' && (
             <small className="plurk-hint">
@@ -491,12 +618,10 @@ export function ExportPanel(props: {
               </div>
             </>
           ) : (
-            <>
-              <div>
-                <span>時間軸格數</span>
-                <b>{plan.timelineFrameCount}</b>
-              </div>
-            </>
+            <div>
+              <span>時間軸格數</span>
+              <b>{plan.timelineFrameCount}</b>
+            </div>
           )}
           <div className={plan.actualFrameCount !== plan.timelineFrameCount ? 'warn' : ''}>
             <span>{format === 'apng' ? '實際 APNG 幀數' : '實際 GIF 幀數'}</span>
@@ -540,7 +665,7 @@ export function ExportPanel(props: {
                       : file.byteLength <= limit
                   return (
                     <p key={file.filePath}>
-                      {pass ? '✓' : '✗'} {file.filePath.split(/[\\/]/).at(-1)}　
+                      {pass ? '✓' : '✗'} {file.filePath.split(/[\\/]/).at(-1)}
                       {(file.byteLength / 1024).toFixed(1)} KB
                       {pass ? '' : `　超過 ${limit / 1024 >= 1024 ? '1 MB' : '25 KB'}`}
                     </p>
@@ -595,6 +720,14 @@ export function ExportPanel(props: {
           </button>
         )}
         <button
+          className="pack-save-button"
+          disabled={!doc || busy}
+          title="把目前這張動畫存進貼圖組的下一個空格"
+          onClick={() => void saveToPack()}
+        >
+          存入貼圖組
+        </button>
+        <button
           className={props.settings?.hasGiphyKey ? 'giphy-button' : 'giphy-button secondary'}
           disabled={!doc || busy}
           title={
@@ -636,7 +769,9 @@ export function ExportPanel(props: {
             </label>
             <footer>
               <button onClick={() => setUpload(null)}>取消</button>
-              <button onClick={() => void confirmGiphy()}>確認上傳</button>
+              <button disabled={busy} onClick={() => void confirmGiphy()}>
+                {busy ? '上傳中…' : '確認上傳'}
+              </button>
             </footer>
           </section>
         </div>
