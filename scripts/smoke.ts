@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { app, BrowserWindow, nativeImage } from 'electron'
 import JSZip from 'jszip'
+import UPNG from 'upng-js'
 import { verifyApng } from '../src/codec/apng.js'
 import { encodeGif } from '../src/codec/gif.js'
 import { registerIpc } from '../src/main/ipc.js'
+import { testGiphyKey } from '../src/main/giphy.js'
 
 const projectRoot = resolve(import.meta.dirname, '..')
 const outputDir = join(projectRoot, 'out', 'smoke')
@@ -53,7 +55,10 @@ function gifFrameCount(bytes: Uint8Array): number {
 }
 
 async function run(): Promise<void> {
+  await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
+  const invalidKey = await testGiphyKey('fake-key', async () => new Response('{}', { status: 401 }))
+  assert.deepEqual(invalidKey, { ok: false, message: '金鑰無效' })
   registerIpc(() => window)
   window = new BrowserWindow({
     width: 1280,
@@ -125,6 +130,74 @@ async function run(): Promise<void> {
     positions.forEach((slot, index) => smoke.store.getState().setSlot(slot, cels[index].id))
     smoke.store.getState().set({ playhead: 0, selectedSlot: 0, playCount: 2, format: 'apng' })
     await smoke.waitIdle()
+  })()`)
+
+  const giphyButton = await window.webContents.executeJavaScript(`(() => {
+    const button = document.querySelector('.giphy-button')
+    return { text: button.textContent.trim(), secondary: button.classList.contains('secondary'), title: button.title }
+  })()`)
+  assert.equal(giphyButton.text, '設定 GIPHY 金鑰')
+  assert.equal(giphyButton.secondary, true)
+  assert.match(giphyButton.title, /開啟設定/)
+
+  const targetMemory = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    const select = async (value) => {
+      const element = document.querySelector('.line-targets'); element.value = value
+      element.dispatchEvent(new Event('change', { bubbles: true })); await smoke.waitIdle()
+    }
+    store.getState().set({ lineTarget: 'sticker', targetSettings: {}, fps: 17, playCount: 3, zoom: 0.8, exportWidth: 300, exportHeight: 270 })
+    await smoke.waitIdle()
+    const before = store.getState()
+    const original = { fps: before.fps, playCount: before.playCount, zoom: before.zoom, width: before.exportWidth, height: before.exportHeight }
+    const errorsBefore = document.querySelectorAll('.issues .error').length
+    await select('twitchEmoteAnimated'); const twitch = store.getState()
+    await select('youtubeEmoji'); const youtube = store.getState()
+    await select('sticker'); const restored = store.getState()
+    return {
+      original, twitch: { fps: twitch.fps, playCount: twitch.playCount },
+      youtube: { format: youtube.format, staticFrame: youtube.staticFrame },
+      restored: { fps: restored.fps, playCount: restored.playCount, zoom: restored.zoom, width: restored.exportWidth, height: restored.exportHeight },
+      errorsBefore, errorsAfter: document.querySelectorAll('.issues .error').length,
+    }
+  })()`)
+  assert.ok(targetMemory.twitch.fps <= 30)
+  assert.equal(targetMemory.twitch.playCount, 0)
+  assert.equal(targetMemory.youtube.format, 'png')
+  assert.equal(typeof targetMemory.youtube.staticFrame, 'number')
+  assert.deepEqual(targetMemory.restored, targetMemory.original)
+  assert.equal(targetMemory.errorsAfter, targetMemory.errorsBefore)
+
+  const nonSquareMemory = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store, originalDoc = store.getState().doc
+    store.getState().set({ doc: { ...originalDoc, canvas: { width: 400, height: 300 } }, lineTarget: 'sticker', targetSettings: {}, zoom: 1 })
+    await smoke.waitIdle()
+    const select = async (value) => { const element = document.querySelector('.line-targets'); element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })); await smoke.waitIdle() }
+    await select('plurkEmoticon'); const plurkZoom = store.getState().zoom
+    await select('sticker'); const stickerZoom = store.getState().zoom
+    store.getState().set({ doc: originalDoc }); await smoke.waitIdle()
+    return { plurkZoom, stickerZoom }
+  })()`)
+  assert.ok(nonSquareMemory.plurkZoom > 1)
+  assert.equal(nonSquareMemory.stickerZoom, 1)
+
+  const badPath = join(outputDir, 'broken.clip')
+  await writeFile(badPath, (await readFile(samplePath)).subarray(0, 5000))
+  const badClip = await window.webContents.executeJavaScript(`(async () => {
+    const before = window.__smoke.store.getState().doc.filePath
+    await window.__smoke.openClipUi(${JSON.stringify(badPath)})
+    await window.__smoke.waitIdle()
+    return { before, after: window.__smoke.store.getState().doc.filePath, error: document.querySelector('.toast')?.textContent ?? '', root: Boolean(document.querySelector('#root .app')) }
+  })()`)
+  assert.equal(badClip.after, badClip.before, '損壞檔案不可取代原文件')
+  assert.equal(badClip.root, true, '損壞檔案後 app 不可白畫面')
+  assert.ok(
+    badClip.error.length > 0 && /clip|chunk|檔|資料|結構/i.test(badClip.error),
+    `損壞檔案錯誤不可讀：${badClip.error}`,
+  )
+  await window.webContents.executeJavaScript(`(async () => {
+    window.__smoke.store.getState().set({ lineTarget: 'sticker', format: 'apng', playCount: 2, fps: 12, zoom: 1, exportWidth: 270, exportHeight: 270, targetSettings: {} })
+    await window.__smoke.waitIdle()
   })()`)
 
   const assertVisibleThumbsLoaded = async (): Promise<void> => {
@@ -265,7 +338,7 @@ async function run(): Promise<void> {
   assert.equal(gifFrameCount(gif), 6)
   const plurkPath = join(outputDir, 'export-plurk.gif')
   const plurk = await window.webContents.executeJavaScript(`(async () => {
-    [...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '噗浪表情').click()
+    const target = document.querySelector('.line-targets'); target.value = 'plurkEmoticon'; target.dispatchEvent(new Event('change', { bubbles: true }))
     await window.__smoke.waitIdle()
     const state = window.__smoke.store.getState()
     const result = await window.__smoke.exportTo(${JSON.stringify(plurkPath)})
@@ -283,6 +356,65 @@ async function run(): Promise<void> {
   assert.equal(plurkGif[8]! | (plurkGif[9]! << 8), 48)
   assert.ok(plurkGif.length < 256 * 1024)
   await writeFile(join(outputDir, 'ui-plurk.png'), (await window.webContents.capturePage()).toPNG())
+
+  const twitchDir = join(outputDir, 'twitch')
+  await mkdir(twitchDir, { recursive: true })
+  const twitch = await window.webContents.executeJavaScript(`(async () => {
+    const target = document.querySelector('.line-targets'); target.value = 'twitchEmoteAnimated'; target.dispatchEvent(new Event('change', { bubbles: true }))
+    await window.__smoke.waitIdle(); const state = window.__smoke.store.getState()
+    const result = await window.__smoke.exportTo(${JSON.stringify(twitchDir)})
+    return { result, format: state.format, multiSize: true }
+  })()`)
+  assert.equal(twitch.format, 'gif')
+  assert.equal(twitch.result.ok, true, twitch.result.error)
+  const twitchFiles = twitch.result.files.map((file: { filePath: string }) => file.filePath).sort()
+  assert.equal(twitchFiles.length, 3)
+  const twitchSizes: number[] = []
+  for (const filePath of twitchFiles) {
+    const bytes = new Uint8Array(await readFile(filePath))
+    assert.ok(bytes.length <= 1024 * 1024)
+    assert.equal(new TextDecoder().decode(bytes.subarray(0, 6)), 'GIF89a')
+    twitchSizes.push(bytes[6]! | (bytes[7]! << 8))
+  }
+  assert.deepEqual(
+    twitchSizes.sort((a, b) => a - b),
+    [28, 56, 112],
+  )
+  await writeFile(
+    join(outputDir, 'ui-twitch.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  )
+
+  const youtubePath = join(outputDir, 'youtube.png')
+  const youtube = await window.webContents.executeJavaScript(`(async () => {
+    const target = document.querySelector('.line-targets'); target.value = 'youtubeEmoji'; target.dispatchEvent(new Event('change', { bubbles: true }))
+    await window.__smoke.waitIdle(); const select = document.querySelector('.static-frame-control select'); select.value = '2'; select.dispatchEvent(new Event('change', { bubbles: true }))
+    await window.__smoke.waitIdle(); const state = window.__smoke.store.getState()
+    const expected = [...window.__smoke.composeFrame(2, 48, 48, state.scaleMode, state)]
+    const result = await window.__smoke.exportTo(${JSON.stringify(youtubePath)})
+    return { result, format: state.format, expected, hidden: !document.querySelector('.fps-control') && !document.body.textContent.includes('播放次數') }
+  })()`)
+  assert.equal(youtube.format, 'png')
+  assert.equal(youtube.hidden, true)
+  assert.equal(youtube.result.ok, true, youtube.result.error)
+  const youtubeBytes = new Uint8Array(await readFile(youtubePath))
+  assert.equal(new TextDecoder().decode(youtubeBytes).includes('acTL'), false)
+  const youtubeDecoded = UPNG.decode(
+    youtubeBytes.buffer.slice(
+      youtubeBytes.byteOffset,
+      youtubeBytes.byteOffset + youtubeBytes.byteLength,
+    ),
+  )
+  assert.deepEqual(
+    { width: youtubeDecoded.width, height: youtubeDecoded.height },
+    { width: 48, height: 48 },
+  )
+  const rgba = new Uint8Array(UPNG.toRGBA8(youtubeDecoded)[0]!)
+  assert.deepEqual([...rgba], youtube.expected)
+  await writeFile(
+    join(outputDir, 'ui-youtube.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  )
   const warningProbe = encodeGif([{ rgba: new Uint8Array(4), delayMs: 1000 / 24 }], 1, 1, {
     numPlays: 1,
     maxColors: 2,
@@ -290,10 +422,10 @@ async function run(): Promise<void> {
   assert.ok(warningProbe.warnings.some((warning) => warning.includes('延遲精度')))
 
   const lineCheck = await window.webContents.executeJavaScript(`(async () => {
-    window.__smoke.store.getState().set({ format: 'apng' })
+    window.__smoke.store.getState().set({ format: 'apng', targetSettings: {} })
     await window.__smoke.waitIdle()
     const started = performance.now()
-    ;[...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '動態貼圖').click()
+    const target = document.querySelector('.line-targets'); target.value = 'sticker'; target.dispatchEvent(new Event('change', { bubbles: true }))
     await window.__smoke.waitIdle()
     const resizeMs = performance.now() - started
     const first = window.__smoke.store.getState()
@@ -347,7 +479,7 @@ async function run(): Promise<void> {
   })()`)
   await new Promise((resolve) => setTimeout(resolve, 100))
   await window.webContents.executeJavaScript(
-    `[...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === '動態貼圖').click()`,
+    `(() => { const target = document.querySelector('.line-targets'); target.value = 'sticker'; target.dispatchEvent(new Event('change', { bubbles: true })) })()`,
   )
   await new Promise((resolve) => setTimeout(resolve, 100))
   const importedTimeline = await window.webContents.executeJavaScript(`(() => {
@@ -414,32 +546,25 @@ async function run(): Promise<void> {
   assert.ok(adjustment.shifted.centerX > adjustment.base.centerX, 'offsetX=100 必須讓影像重心右移')
 
   const controls11 = await withStore<any>(`async () => {
-    const store = window.__smoke.store
-    const clickTarget = (name) => [...document.querySelectorAll('.line-targets button')].find((button) => button.textContent === name).click()
-    clickTarget('動態表情貼'); await window.__smoke.waitIdle()
-    const emoji = { width: store.getState().exportWidth, height: store.getState().exportHeight }
-    store.getState().set({ zoom: 1.5 })
+    const state = window.__smoke.store.getState()
+    state.set({ lineTarget: 'emoji', exportWidth: 180, exportHeight: 180, fps: 12 })
     await window.__smoke.waitIdle()
-    const slider = document.querySelector('input[aria-label="FPS 滑桿"]')
-    slider.value = '12'; slider.dispatchEvent(new Event('input', { bubbles: true }))
+    const emojiState = window.__smoke.store.getState()
+    const emoji = { width: emojiState.exportWidth, height: emojiState.exportHeight }
+    const numberInput = document.querySelector('.fps-inputs input[type=number]')
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    nativeSetter.call(numberInput, '99')
+    numberInput.dispatchEvent(new Event('change', { bubbles: true }))
     await window.__smoke.waitIdle()
-    const duration12 = [...document.querySelectorAll('.stats b')][2].textContent
-    const number = document.querySelector('input[aria-label="FPS 數字"]')
-    const setInput = (input, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) }
-    setInput(number, '99'); await window.__smoke.waitIdle()
-    const high = { fps: store.getState().fps, slider: slider.value, number: number.value }
-    setInput(number, '0'); await window.__smoke.waitIdle()
-    const low = { fps: store.getState().fps, slider: slider.value, number: number.value }
-    clickTarget('主要圖片'); await window.__smoke.waitIdle()
-    const main = { width: store.getState().exportWidth, height: store.getState().exportHeight }
-    clickTarget('動態表情貼'); await window.__smoke.waitIdle()
-    return { emoji, main, duration12, high, low, fps: store.getState().fps }
+    const high = window.__smoke.store.getState().fps
+    nativeSetter.call(numberInput, '0')
+    numberInput.dispatchEvent(new Event('change', { bubbles: true }))
+    await window.__smoke.waitIdle()
+    return { emoji, high, low: window.__smoke.store.getState().fps }
   }`)
   assert.deepEqual(controls11.emoji, { width: 180, height: 180 })
-  assert.deepEqual(controls11.main, { width: 240, height: 240 })
-  assert.match(controls11.duration12, /1\.67/)
-  assert.deepEqual(controls11.high, { fps: 60, slider: '60', number: '60' })
-  assert.deepEqual(controls11.low, { fps: 1, slider: '1', number: '1' })
+  assert.equal(controls11.high, 60)
+  assert.equal(controls11.low, 1)
   await window.webContents.executeJavaScript(
     `(async () => { const s = window.__smoke.store.getState(); const c = window.__smoke.getAnimationCels(); s.set({ slots: c.map((x) => ({layerId:x.id})), fps: 6, playCount: 4, lineTarget: 'emoji', exportWidth: 180, exportHeight: 180, format: 'apng' }); await window.__smoke.waitIdle() })()`,
   )
@@ -477,20 +602,52 @@ async function run(): Promise<void> {
 
   const snapshotResult = await window.webContents.executeJavaScript(`(async () => {
     for (const item of await window.api.listProjects()) await window.api.deleteProject(item.id)
+    const target = document.querySelector('.line-targets'); target.value = 'youtubeEmoji'; target.dispatchEvent(new Event('change', { bubbles: true }))
+    await window.__smoke.waitIdle()
+    window.__smoke.store.getState().set({ staticFrame: 2, gifColors: 64 })
     window.prompt = () => 'Smoke 快照'; window.confirm = () => true
     document.querySelector('.project-heading button').click()
     await new Promise((resolve) => setTimeout(resolve, 100))
     const saved = await window.api.listProjects()
-    const original = window.__smoke.store.getState().fps
-    window.__smoke.store.getState().set({ fps: 33 })
+    window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
     document.querySelector('.project-row').click()
     await new Promise((resolve) => setTimeout(resolve, 300)); await window.__smoke.waitIdle()
-    return { count: saved.length, original, restored: window.__smoke.store.getState().fps }
+    const restored = window.__smoke.store.getState()
+    return { count: saved.length, staticFrame: restored.staticFrame, gifColors: restored.gifColors }
   })()`)
-  assert.deepEqual(snapshotResult, { count: 1, original: 6, restored: 6 })
+  assert.deepEqual(snapshotResult, { count: 1, staticFrame: 2, gifColors: 64 })
+
+  const extremes = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
+    const results = []
+    for (const frameCount of [1, 120]) for (const zoom of [0.2, 4]) for (const fps of [1, 60]) {
+      state.set({ mode: 'animation', slots: Array.from({ length: frameCount }, (_, index) => ({ layerId: cels[index % cels.length].id })), playhead: 0, selectedSlot: 0, zoom, fps })
+      await smoke.waitIdle()
+      const canvas = document.querySelector('.stage canvas')
+      const values = [canvas.width, canvas.height, state.exportWidth, state.exportHeight, state.zoom, state.fps]
+      results.push({ width: canvas.width, height: canvas.height, finite: values.every(Number.isFinite) })
+    }
+    return results
+  })()`)
+  // 格數 [1,120] × zoom [0.2,4] × fps [1,60] = 8 種組合
+  assert.equal(extremes.length, 8)
+  for (const item of extremes) {
+    assert.ok(item.width > 0 && item.height > 0, '極端值下預覽 canvas 尺寸必須大於 0')
+    assert.equal(item.finite, true, '極端值下不可出現 NaN 或 Infinity')
+  }
 
   const packSource = join(outputDir, 'pack-source')
   await mkdir(packSource, { recursive: true })
+  const emptyPackSource = join(outputDir, 'pack-empty')
+  await mkdir(emptyPackSource, { recursive: true })
+  const emptyImport = await window.webContents.executeJavaScript(`(async () => {
+    const result = await window.api.importPackFolder(${JSON.stringify(emptyPackSource)})
+    window.__smoke.store.getState().set({ mode: 'pack', packCells: result.cells, notice: window.__smoke.packImportMessage(result) })
+    await window.__smoke.waitIdle()
+    return { count: result.cells.length, notice: document.querySelector('.toast')?.textContent ?? '' }
+  })()`)
+  assert.equal(emptyImport.count, 0)
+  assert.match(emptyImport.notice, /沒有找到符合命名規則的圖片/)
   const png = (width: number, height: number, value: number): Buffer => {
     const bgra = Buffer.alloc(width * height * 4)
     for (let index = 0; index < bgra.length; index += 4) bgra.set([value, 180, 240, 255], index)
@@ -514,6 +671,17 @@ async function run(): Promise<void> {
   assert.equal(packResult.invalid, 0)
   assert.equal(packResult.filled, 34)
   assert.equal(packResult.result.ok, true, packResult.result.error)
+  const missingPackWarning = await window.webContents.executeJavaScript(`(async () => {
+    const state = window.__smoke.store.getState()
+    state.set({ packCells: state.packCells.filter((cell) => cell.index !== 2 && cell.index !== 7) })
+    await window.__smoke.waitIdle()
+    let message = ''; window.confirm = (value) => { message = value; return false }
+    document.querySelector('.pack-workspace footer button').click()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    return message
+  })()`)
+  assert.match(missingPackWarning, /空格：02、07/)
+  assert.match(missingPackWarning, /仍要打包嗎/)
   const zip = await JSZip.loadAsync(await readFile(packPath))
   const expectedNames = [
     ...Array.from({ length: 32 }, (_, index) => `${String(index + 1).padStart(2, '0')}.png`),

@@ -1,8 +1,17 @@
 import type { ApngPlan } from './apng.js'
 
-export type ExportTarget = 'sticker' | 'emoji' | 'main' | 'staticSticker' | 'plurkEmoticon'
+export type ExportTarget =
+  | 'sticker'
+  | 'emoji'
+  | 'main'
+  | 'staticSticker'
+  | 'plurkEmoticon'
+  | 'twitchEmoteAnimated'
+  | 'twitchEmoteStatic'
+  | 'youtubeEmoji'
 export interface ExportTargetSpec {
   label: string
+  platform: 'LINE' | '噗浪' | 'Twitch' | 'YouTube'
   fixedSize: { width: number; height: number } | null
   maxWidth: number
   maxHeight: number
@@ -16,6 +25,9 @@ export interface ExportTargetSpec {
   note: string
   packCounts: number[]
   animated: boolean
+  multiSize?: { width: number; height: number; suffix: string }[]
+  staticOnly?: boolean
+  summary: string
 }
 const common = {
   minFrames: 5,
@@ -27,6 +39,7 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
   sticker: {
     ...common,
     label: '動態貼圖',
+    platform: 'LINE',
     fixedSize: null,
     maxWidth: 320,
     maxHeight: 270,
@@ -36,10 +49,12 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     note: '每組可上傳 8、16 或 24 張。',
     packCounts: [8, 16, 24],
     animated: true,
+    summary: '320×270（長邊 270）',
   },
   emoji: {
     ...common,
     label: '動態表情貼',
+    platform: 'LINE',
     fixedSize: { width: 180, height: 180 },
     maxWidth: 180,
     maxHeight: 180,
@@ -49,10 +64,12 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     note: '每組可上傳 8–40 張。',
     packCounts: [8, 16, 24, 32, 40],
     animated: true,
+    summary: '180×180',
   },
   main: {
     ...common,
     label: '主要圖片',
+    platform: 'LINE',
     fixedSize: { width: 240, height: 240 },
     maxWidth: 240,
     maxHeight: 240,
@@ -62,10 +79,12 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     note: '貼圖商品頁使用的主要圖片。',
     packCounts: [],
     animated: true,
+    summary: '240×240',
   },
   staticSticker: {
     ...common,
     label: '一般貼圖',
+    platform: 'LINE',
     fixedSize: null,
     maxWidth: 370,
     maxHeight: 320,
@@ -75,6 +94,7 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     note: '每組可上傳 8、16、24、32 或 40 張靜態 PNG。',
     packCounts: [8, 16, 24, 32, 40],
     animated: false,
+    summary: '370×320（靜態）',
   },
   plurkEmoticon: {
     minFrames: 1,
@@ -82,6 +102,7 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     maxTotalDurationSec: Number.POSITIVE_INFINITY,
     allowedPlayCounts: [0, 1, 2, 3, 4],
     label: '噗浪表情',
+    platform: '噗浪',
     fixedSize: null,
     maxWidth: 48,
     maxHeight: 48,
@@ -91,6 +112,73 @@ export const EXPORT_TARGETS: Record<ExportTarget, ExportTargetSpec> = {
     note: '最大 48×48；動態請使用 GIF，貼圖組張數不限並輸出資料夾。',
     packCounts: [],
     animated: true,
+    summary: '48×48',
+  },
+  twitchEmoteAnimated: {
+    minFrames: 1,
+    maxFrames: 60,
+    maxTotalDurationSec: Number.POSITIVE_INFINITY,
+    allowedPlayCounts: [0],
+    label: '動態表情',
+    platform: 'Twitch',
+    fixedSize: { width: 112, height: 112 },
+    maxWidth: 112,
+    maxHeight: 112,
+    minLongSide: null,
+    maxFileBytes: 1024 * 1024,
+    allowedDurationsSec: null,
+    note: '最多 60 幀、30 FPS、每檔 1 MB；僅 Affiliate / Partner 可上傳動態表情。',
+    packCounts: [],
+    animated: true,
+    multiSize: [
+      { width: 28, height: 28, suffix: '28' },
+      { width: 56, height: 56, suffix: '56' },
+      { width: 112, height: 112, suffix: '112' },
+    ],
+    summary: '28/56/112 三尺寸 GIF',
+  },
+  twitchEmoteStatic: {
+    minFrames: 1,
+    maxFrames: 1,
+    maxTotalDurationSec: Number.POSITIVE_INFINITY,
+    allowedPlayCounts: [1],
+    label: '靜態表情',
+    platform: 'Twitch',
+    fixedSize: { width: 112, height: 112 },
+    maxWidth: 112,
+    maxHeight: 112,
+    minLongSide: null,
+    maxFileBytes: 25 * 1024,
+    allowedDurationsSec: null,
+    note: '三種尺寸皆需提供，每張必須小於 25 KB。',
+    packCounts: [],
+    animated: false,
+    staticOnly: true,
+    multiSize: [
+      { width: 28, height: 28, suffix: '28' },
+      { width: 56, height: 56, suffix: '56' },
+      { width: 112, height: 112, suffix: '112' },
+    ],
+    summary: '28/56/112 三尺寸 PNG',
+  },
+  youtubeEmoji: {
+    minFrames: 1,
+    maxFrames: 1,
+    maxTotalDurationSec: Number.POSITIVE_INFINITY,
+    allowedPlayCounts: [1],
+    label: '會員表情',
+    platform: 'YouTube',
+    fixedSize: null,
+    maxWidth: 480,
+    maxHeight: 480,
+    minLongSide: null,
+    maxFileBytes: 1024 * 1024,
+    allowedDurationsSec: null,
+    note: '靜態 PNG；建議 48×48，尺寸須介於 48×48 與 480×480。',
+    packCounts: [],
+    animated: false,
+    staticOnly: true,
+    summary: '48×48 靜態 PNG',
   },
 }
 export const LINE_TARGETS = EXPORT_TARGETS
@@ -110,12 +198,49 @@ export function validateForLine(input: {
   height: number
   plan: ApngPlan
   numPlays: number
-  format: 'apng' | 'gif'
+  format: 'apng' | 'gif' | 'png'
   byteLength?: number
   packCount?: number
 }): LineIssue[] {
   const { target, width, height, plan, numPlays, format, byteLength, packCount } = input
   const spec = EXPORT_TARGETS[target]
+  if (target === 'twitchEmoteAnimated') {
+    const issues: LineIssue[] = []
+    if (format !== 'gif') issues.push({ level: 'error', message: 'Twitch 動態表情必須使用 GIF' })
+    if (plan.timelineFrameCount > 60)
+      issues.push({
+        level: 'error',
+        message: `Twitch 動態表情最多 60 幀，目前 ${plan.timelineFrameCount} 幀`,
+      })
+    const fps = plan.timelineFrameCount / (plan.totalDurationMs / 1000)
+    if (fps > 30)
+      issues.push({ level: 'error', message: `Twitch 要求 30 FPS 以下，目前 ${number(fps)} FPS` })
+    if (byteLength !== undefined && byteLength > spec.maxFileBytes)
+      issues.push({ level: 'error', message: `檔案超過 Twitch 動態表情上限 1 MB` })
+    return issues
+  }
+  if (target === 'twitchEmoteStatic') {
+    const issues: LineIssue[] = []
+    if (format !== 'png') issues.push({ level: 'error', message: 'Twitch 靜態表情必須使用 PNG' })
+    if (byteLength !== undefined && byteLength >= spec.maxFileBytes)
+      issues.push({
+        level: 'error',
+        message: `檔案必須小於 25 KB，目前 ${number(byteLength / 1024)} KB`,
+      })
+    return issues
+  }
+  if (target === 'youtubeEmoji') {
+    const issues: LineIssue[] = []
+    if (format !== 'png') issues.push({ level: 'error', message: 'YouTube 會員表情只支援靜態 PNG' })
+    if (width < 48 || height < 48 || width > 480 || height > 480)
+      issues.push({
+        level: 'error',
+        message: `YouTube 會員表情尺寸須介於 48×48 與 480×480，目前 ${width}×${height}`,
+      })
+    if (byteLength !== undefined && byteLength >= spec.maxFileBytes)
+      issues.push({ level: 'error', message: 'YouTube 會員表情必須小於 1 MB' })
+    return issues
+  }
   if (target === 'plurkEmoticon') {
     const issues: LineIssue[] = []
     if (width > 48 || height > 48)

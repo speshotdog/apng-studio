@@ -9,7 +9,7 @@ export interface AutoFixInput {
   playCount: number
   exportWidth: number
   exportHeight: number
-  format: 'apng' | 'gif'
+  format: 'apng' | 'gif' | 'png'
   identicalToPrev: boolean[]
 }
 export interface AutoFixChange {
@@ -23,7 +23,7 @@ export interface AutoFixResult {
   playCount: number
   exportWidth: number
   exportHeight: number
-  format: 'apng' | 'gif'
+  format: 'apng' | 'gif' | 'png'
   mergeIdentical: true
   changes: AutoFixChange[]
   unresolved: string[]
@@ -34,7 +34,15 @@ const text = (slots: { layerId: number | null }[]): string => `${slots.length} �
 export function autoFixForLine(input: AutoFixInput): AutoFixResult {
   const changes: AutoFixChange[] = []
   const unresolved: string[] = []
-  let slots = input.slots.slice(0, 20).map((slot) => ({ ...slot }))
+  const twitch = input.target === 'twitchEmoteAnimated'
+  let slots = input.slots.slice(0, twitch ? 60 : 20).map((slot) => ({ ...slot }))
+  if (twitch) {
+    if (input.slots.length > 60)
+      changes.push({ label: '影格', from: text(input.slots), to: '60 格（裁切超出上限）' })
+    const fps = Math.min(30, input.fps)
+    if (fps !== input.fps) changes.push({ label: 'FPS', from: String(input.fps), to: '30' })
+    return { ...input, slots, fps, format: 'gif', mergeIdentical: true, changes, unresolved }
+  }
   if (input.slots.length > 20)
     changes.push({ label: '影格', from: text(input.slots), to: '20 格（裁切超出上限）' })
 

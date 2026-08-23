@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { App } from './App.js'
 import { composeFrame, ensureBitmap } from './compose.js'
 import { exportTo } from './export.js'
+import { packImportMessage } from './packMessage.js'
 import { useStore } from './state/store.js'
 import './styles.css'
 import './panels.css'
@@ -21,6 +22,7 @@ function animationCels(): { id: number; name: string }[] {
 
 if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
   ;(window as unknown as { __smoke: unknown }).__smoke = {
+    packImportMessage,
     store: useStore,
     openClip: async (path: string) => {
       const doc = await window.api.openClip(path)

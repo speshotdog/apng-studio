@@ -14,6 +14,17 @@ export function App(): React.JSX.Element {
   const notice = useStore((s) => s.notice)
   const mode = useStore((s) => s.mode)
   const [error, setError] = useState('')
+  // 訊息要會自己消失，否則一次開檔失敗的錯誤會永久卡在畫面上並蓋掉之後所有提示
+  useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(''), 6000)
+    return () => clearTimeout(timer)
+  }, [error])
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => set({ notice: '' }), 6000)
+    return () => clearTimeout(timer)
+  }, [notice, set])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<PublicSettings | null>(null)
   const openClip = async (path?: string): Promise<void> => {
@@ -37,6 +48,11 @@ export function App(): React.JSX.Element {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
+  useEffect(() => {
+    if (!new URLSearchParams(location.search).has('smoke')) return
+    const smoke = (window as unknown as { __smoke?: Record<string, unknown> }).__smoke
+    if (smoke) smoke.openClipUi = openClip
+  }, [])
   useEffect(
     () =>
       window.api.onMenuCommand((command) => {
@@ -98,8 +114,21 @@ export function App(): React.JSX.Element {
       ) : (
         <PackPanel />
       )}
-      {error && <div className="toast">{error}</div>}
-      {!error && notice && <div className="toast">{notice}</div>}
+      {(error || notice) && (
+        <div
+          className={`toast ${error ? 'toast-error' : ''}`}
+          data-toast-level={error ? 'error' : 'info'}
+        >
+          {error || notice}
+          <button
+            className="toast-close"
+            aria-label="關閉訊息"
+            onClick={() => (error ? setError('') : set({ notice: '' }))}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

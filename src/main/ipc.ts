@@ -2,9 +2,11 @@ import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import JSZip from 'jszip'
+import UPNG from 'upng-js'
 import { parseClip, type ClipDocument, type ClipLayer } from '../clip/index.js'
 import { encodeApng, verifyApng } from '../codec/apng.js'
 import { encodeGif } from '../codec/gif.js'
+import { encodePng } from '../codec/png.js'
 import type { ClipSummary, ExportPayload, ExportResult, LayerNode } from '../preload/api.js'
 import type { PackImportCell, PackImportResult, ProjectSnapshot } from '../project/types.js'
 import type { ExportTarget } from '../codec/line.js'
@@ -183,21 +185,132 @@ function node(layer: ClipLayer): LayerNode {
 }
 async function writeExport(filePath: string, payload: ExportPayload): Promise<ExportResult> {
   try {
-    if (payload.format === 'apng') {
-      const bytes = encodeApng(payload.frames, payload.width, payload.height, {
-        numPlays: payload.numPlays,
-        mergeIdentical: payload.mergeIdentical,
-      })
-      const info = verifyApng(bytes)
-      await writeFile(filePath, bytes)
-      return { ok: true, filePath, info, warnings: [], byteLength: bytes.length }
+    const encoded = encodeExport(payload)
+    await writeFile(filePath, encoded.bytes)
+    return { ok: true, filePath, ...encoded }
+  } catch (error) {
+    return {
+      ok: false,
+      warnings: [],
+      error: error instanceof Error ? error.message : String(error),
     }
-    const result = encodeGif(payload.frames, payload.width, payload.height, {
+  }
+}
+
+function encodeExport(payload: ExportPayload): {
+  bytes: Uint8Array
+  warnings: string[]
+  byteLength: number
+  info?: ReturnType<typeof verifyApng>
+} {
+  if (payload.format === 'png') {
+    const frame = payload.frames[0]
+    if (!frame) throw new Error('靜態 PNG 沒有可輸出的影格')
+    const bytes = encodePng(frame.rgba, payload.width, payload.height)
+    return { bytes, warnings: [], byteLength: bytes.length }
+  }
+  if (payload.format === 'apng') {
+    const bytes = encodeApng(payload.frames, payload.width, payload.height, {
       numPlays: payload.numPlays,
-      maxColors: payload.gif?.maxColors ?? 256,
+      mergeIdentical: payload.mergeIdentical,
     })
-    await writeFile(filePath, result.bytes)
-    return { ok: true, filePath, warnings: result.warnings, byteLength: result.bytes.length }
+    const info = verifyApng(bytes)
+    return { bytes, info, warnings: [], byteLength: bytes.length }
+  }
+  const result = encodeGif(payload.frames, payload.width, payload.height, {
+    numPlays: payload.numPlays,
+    maxColors: payload.gif?.maxColors ?? 256,
+  })
+  return { bytes: result.bytes, warnings: result.warnings, byteLength: result.bytes.length }
+}
+
+function encodeTwitchFile(payload: ExportPayload): ReturnType<typeof encodeExport> {
+  const limit = payload.format === 'gif' ? 1024 * 1024 : 25 * 1024
+  let encoded = encodeExport(payload)
+  if (encoded.byteLength < limit || (payload.format === 'gif' && encoded.byteLength === limit))
+    return encoded
+  for (const colors of [128, 64, 32]) {
+    if (payload.format === 'gif') {
+      encoded = encodeExport({ ...payload, gif: { maxColors: colors } })
+    } else {
+      const frame = payload.frames[0]
+      if (!frame) break
+      const rgba = frame.rgba.buffer.slice(
+        frame.rgba.byteOffset,
+        frame.rgba.byteOffset + frame.rgba.byteLength,
+      ) as ArrayBuffer
+      const bytes = new Uint8Array(UPNG.encode([rgba], payload.width, payload.height, colors))
+      encoded = { bytes, byteLength: bytes.length, warnings: [] }
+    }
+    encoded.warnings = [...encoded.warnings, `已自動減色至 ${colors} 色以嘗試符合大小限制`]
+    if (encoded.byteLength < limit || (payload.format === 'gif' && encoded.byteLength === limit))
+      return encoded
+  }
+  return encoded
+}
+
+async function saveMultiZip(
+  getWindow: () => BrowserWindow | null,
+  payloads: Array<{ suffix: string; payload: ExportPayload }>,
+): Promise<ExportResult> {
+  try {
+    const picked = await dialog.showSaveDialog(getWindow() ?? (undefined as never), {
+      defaultPath: `${timestampName()}_twitch.zip`,
+      filters: [{ name: 'ZIP', extensions: ['zip'] }],
+    })
+    if (picked.canceled || !picked.filePath) return { ok: false, warnings: [], error: '已取消打包' }
+    const zip = new JSZip()
+    const base = timestampName()
+    for (const item of payloads) {
+      const encoded = encodeTwitchFile(item.payload)
+      zip.file(
+        `${base}_${item.suffix}.${item.payload.format === 'gif' ? 'gif' : 'png'}`,
+        encoded.bytes,
+      )
+    }
+    const bytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+    await writeFile(picked.filePath, bytes)
+    return { ok: true, filePath: picked.filePath, warnings: [], byteLength: bytes.length }
+  } catch (error) {
+    return {
+      ok: false,
+      warnings: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+async function writeMultiExport(
+  getWindow: () => BrowserWindow | null,
+  requested: string | undefined,
+  payloads: Array<{ suffix: string; payload: ExportPayload }>,
+): Promise<ExportResult> {
+  try {
+    let folder = requested
+    if (!folder) {
+      const picked = await dialog.showOpenDialog(getWindow() ?? (undefined as never), {
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (picked.canceled || !picked.filePaths[0])
+        return { ok: false, warnings: [], error: '已取消匯出' }
+      folder = picked.filePaths[0]
+    }
+    const base = timestampName()
+    const files: NonNullable<ExportResult['files']> = []
+    for (const item of payloads) {
+      const extension = item.payload.format === 'gif' ? 'gif' : 'png'
+      const filePath = join(folder, `${base}_${item.suffix}.${extension}`)
+      const encoded = encodeTwitchFile(item.payload)
+      await writeFile(filePath, encoded.bytes)
+      files.push({ filePath, byteLength: encoded.byteLength, warnings: encoded.warnings })
+    }
+    return {
+      ok: true,
+      filePath: folder,
+      files,
+      warnings: files.flatMap((file) => file.warnings),
+      byteLength: files.reduce((sum, file) => sum + file.byteLength, 0),
+    }
   } catch (error) {
     return {
       ok: false,
@@ -297,13 +410,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
   ipcMain.handle('export:save', async (_event, payload: ExportPayload): Promise<ExportResult> => {
     try {
-      const extension = payload.format === 'apng' ? 'png' : 'gif'
+      const extension = payload.format === 'gif' ? 'gif' : 'png'
       const picked = await dialog.showSaveDialog(getWindow() ?? (undefined as never), {
         defaultPath: currentPath
           ? join(dirname(currentPath), `${timestampName()}.${extension}`)
           : `${timestampName()}.${extension}`,
         filters: [
-          { name: payload.format === 'apng' ? 'Animated PNG' : 'GIF', extensions: [extension] },
+          {
+            name:
+              payload.format === 'gif' ? 'GIF' : payload.format === 'png' ? 'PNG' : 'Animated PNG',
+            extensions: [extension],
+          },
         ],
       })
       if (picked.canceled || !picked.filePath)
@@ -320,4 +437,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('export:to', (_event, filePath: string, payload: ExportPayload) =>
     writeExport(filePath, payload),
   )
+  ipcMain.handle('export:saveMulti', (_event, payloads) =>
+    writeMultiExport(getWindow, undefined, payloads),
+  )
+  ipcMain.handle('export:multiTo', (_event, folder: string, payloads) =>
+    writeMultiExport(getWindow, folder, payloads),
+  )
+  ipcMain.handle('export:saveMultiZip', (_event, payloads) => saveMultiZip(getWindow, payloads))
 }

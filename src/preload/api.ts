@@ -25,7 +25,7 @@ export interface ClipSummary {
   }>
 }
 export interface ExportPayload {
-  format: 'apng' | 'gif'
+  format: 'apng' | 'gif' | 'png'
   width: number
   height: number
   frames: { rgba: Uint8Array; delayMs: number }[]
@@ -40,6 +40,7 @@ export interface ExportResult {
   warnings: string[]
   error?: string
   byteLength?: number
+  files?: Array<{ filePath: string; byteLength: number; warnings: string[] }>
 }
 export interface PublicSettings {
   hasGiphyKey: boolean
@@ -66,6 +67,14 @@ export interface Api {
   renderLayer(layerId: number, overrides: Array<[number, boolean]>): Promise<RenderedLayer>
   saveExport(payload: ExportPayload): Promise<ExportResult>
   exportTo(filePath: string, payload: ExportPayload): Promise<ExportResult>
+  saveMultiExport(
+    payloads: Array<{ suffix: string; payload: ExportPayload }>,
+  ): Promise<ExportResult>
+  exportMultiTo(
+    folderPath: string,
+    payloads: Array<{ suffix: string; payload: ExportPayload }>,
+  ): Promise<ExportResult>
+  saveMultiZip(payloads: Array<{ suffix: string; payload: ExportPayload }>): Promise<ExportResult>
   listProjects(): Promise<ProjectSnapshot[]>
   saveProject(snapshot: ProjectSnapshot): Promise<ProjectSnapshot[]>
   deleteProject(id: string): Promise<ProjectSnapshot[]>

@@ -53,3 +53,26 @@ export function filterScanlines(rgba: Uint8Array, w: number, h: number): Uint8Ar
   }
   return output
 }
+
+const PNG_SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10)
+
+export function encodePng(rgba: Uint8Array, width: number, height: number): Uint8Array {
+  const ihdr = new Uint8Array(13)
+  writeU32(ihdr, 0, width)
+  writeU32(ihdr, 4, height)
+  ihdr.set([8, 6, 0, 0, 0], 8)
+  const parts = [
+    PNG_SIGNATURE,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(filterScanlines(rgba, width, height), { level: 9 })),
+    chunk('IEND', new Uint8Array()),
+  ]
+  const output = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0))
+  let offset = 0
+  for (const part of parts) {
+    output.set(part, offset)
+    offset += part.length
+  }
+  return output
+}
+import { deflateSync } from 'node:zlib'

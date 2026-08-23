@@ -7,6 +7,10 @@ const api: Api = {
   renderLayer: (layerId, overrides) => ipcRenderer.invoke('clip:render', layerId, overrides),
   saveExport: (payload: ExportPayload) => ipcRenderer.invoke('export:save', payload),
   exportTo: (filePath, payload) => ipcRenderer.invoke('export:to', filePath, payload),
+  saveMultiExport: (payloads) => ipcRenderer.invoke('export:saveMulti', payloads),
+  exportMultiTo: (folderPath, payloads) =>
+    ipcRenderer.invoke('export:multiTo', folderPath, payloads),
+  saveMultiZip: (payloads) => ipcRenderer.invoke('export:saveMultiZip', payloads),
   listProjects: () => ipcRenderer.invoke('project:list'),
   saveProject: (snapshot) => ipcRenderer.invoke('project:save', snapshot),
   deleteProject: (id) => ipcRenderer.invoke('project:delete', id),

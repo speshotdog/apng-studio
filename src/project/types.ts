@@ -13,7 +13,7 @@ export interface ProjectSnapshot {
     visibility: Array<[number, boolean]>
     fps: number
     playCount: number
-    format: 'apng' | 'gif'
+    format: 'apng' | 'gif' | 'png'
     lineTarget: ExportTarget
     exportWidth: number
     exportHeight: number
@@ -23,6 +23,8 @@ export interface ProjectSnapshot {
     zoom: number
     offsetX: number
     offsetY: number
+    staticFrame?: number
+    gifColors?: number
   }
   pack?: {
     target: ExportTarget

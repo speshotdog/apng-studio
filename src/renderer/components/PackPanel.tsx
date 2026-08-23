@@ -1,6 +1,7 @@
 import React from 'react'
 import { EXPORT_TARGETS, type ExportTarget } from '../../codec/line.js'
 import type { PackImportCell } from '../../project/types.js'
+import { packImportMessage } from '../packMessage.js'
 import { useStore } from '../state/store.js'
 
 function errorFor(
@@ -42,18 +43,15 @@ export function PackPanel(): React.JSX.Element {
   const importFolder = async (): Promise<void> => {
     const result = await window.api.importPackFolder()
     if (!result) return
-    state.set({
-      packCells: result.cells,
-      notice: result.skipped.length
-        ? `已略過：${result.skipped.join('、')}`
-        : `已匯入 ${result.cells.length} 個檔案`,
-    })
+    state.set({ packCells: result.cells, notice: packImportMessage(result) })
   }
   const pack = async (): Promise<void> => {
     const missing = indexes.filter((index) => !cells.has(index))
     if (
       (missing.length || errors.length) &&
-      !confirm(`尚有 ${missing.length} 格未填、${errors.length} 項錯誤，仍要打包嗎？`)
+      !confirm(
+        `尚有空格：${missing.map((index) => (typeof index === 'number' ? String(index).padStart(2, '0') : index)).join('、') || '無'}；${errors.length} 項錯誤，仍要打包嗎？`,
+      )
     )
       return
     const result = await window.api.exportPack(

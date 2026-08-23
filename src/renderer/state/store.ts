@@ -6,6 +6,21 @@ export type ScaleMode = 'smooth' | 'pixel'
 export interface Slot {
   layerId: number | null
 }
+export type TargetSettings = Pick<
+  State,
+  | 'format'
+  | 'exportWidth'
+  | 'exportHeight'
+  | 'lockAspect'
+  | 'fps'
+  | 'playCount'
+  | 'zoom'
+  | 'offsetX'
+  | 'offsetY'
+  | 'scaleMode'
+  | 'staticFrame'
+  | 'gifColors'
+>
 export interface State {
   doc: ClipSummary | null
   bitmaps: Map<string, ImageBitmap>
@@ -15,7 +30,8 @@ export interface State {
   fps: number
   playCount: number
   previewLoop: boolean
-  format: 'apng' | 'gif'
+  format: 'apng' | 'gif' | 'png'
+  staticFrame: number
   exportWidth: number
   exportHeight: number
   lockAspect: boolean
@@ -29,7 +45,7 @@ export interface State {
   playing: boolean
   playhead: number
   gifColors: number
-  gifDither: boolean
+  targetSettings: Partial<Record<ExportTarget, TargetSettings>>
   notice: string
   mode: 'animation' | 'pack'
   packTarget: ExportTarget
@@ -56,6 +72,7 @@ export const useStore = create<State>((set, get) => ({
   playCount: 1,
   previewLoop: true,
   format: 'apng',
+  staticFrame: 0,
   exportWidth: 270,
   exportHeight: 270,
   lockAspect: true,
@@ -69,7 +86,7 @@ export const useStore = create<State>((set, get) => ({
   playing: false,
   playhead: 0,
   gifColors: 256,
-  gifDither: false,
+  targetSettings: {},
   notice: '',
   mode: 'animation',
   packTarget: 'staticSticker',
@@ -93,6 +110,7 @@ export const useStore = create<State>((set, get) => ({
       zoom: 1,
       offsetX: 0,
       offsetY: 0,
+      targetSettings: {},
     })
   },
   setBitmap: (id, bitmap) => set((state) => ({ bitmaps: new Map(state.bitmaps).set(id, bitmap) })),

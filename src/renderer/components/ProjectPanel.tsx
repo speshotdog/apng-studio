@@ -35,6 +35,8 @@ function stateSnapshot(name: string, existing?: ProjectSnapshot): ProjectSnapsho
       zoom: state.zoom,
       offsetX: state.offsetX,
       offsetY: state.offsetY,
+      staticFrame: state.staticFrame,
+      gifColors: state.gifColors,
     },
     pack: {
       target: state.packTarget,
@@ -89,6 +91,8 @@ export function ProjectPanel(): React.JSX.Element {
     const packCells = snapshot.pack ? await window.api.hydratePackCells(snapshot.pack.cells) : []
     set({
       ...snapshot.state,
+      staticFrame: snapshot.state.staticFrame ?? 0,
+      gifColors: snapshot.state.gifColors ?? 256,
       visibility: new Map(snapshot.state.visibility),
       packTarget: snapshot.pack?.target ?? 'staticSticker',
       packCount: snapshot.pack?.count ?? 32,

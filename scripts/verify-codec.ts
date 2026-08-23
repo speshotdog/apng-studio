@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { encodeApng, planApng, verifyApng, type ApngFrame } from '../src/codec/apng.js'
 import { encodeGif } from '../src/codec/gif.js'
-import { validateForLine } from '../src/codec/line.js'
+import { EXPORT_TARGETS, validateForLine } from '../src/codec/line.js'
 import { planFromSlots } from '../src/renderer/plan.js'
 import { useStore } from '../src/renderer/state/store.js'
 import { autoFixForLine } from '../src/codec/autofix.js'
@@ -195,6 +195,71 @@ assert(plurkIssues(64, 64, 'gif', 100).some(({ message }) => message.includes('4
 assert(plurkIssues(48, 48, 'gif', 300 * 1024).some(({ message }) => message.includes('256')))
 assert(plurkIssues(48, 48, 'apng', 100).some(({ message }) => message.includes('GIF')))
 assert.equal(plurkIssues(40, 48, 'gif', 100).filter(({ level }) => level === 'error').length, 0)
+
+const targetIssues = (
+  target: 'twitchEmoteAnimated' | 'twitchEmoteStatic' | 'youtubeEmoji',
+  frameCount: number,
+  fps: number,
+  format: 'apng' | 'gif' | 'png',
+  bytes: number,
+  size = 48,
+) =>
+  validateForLine({
+    target,
+    width: size,
+    height: size,
+    plan: planFromSlots(
+      Array.from({ length: frameCount }, (_, index) => index),
+      fps,
+      false,
+    ),
+    numPlays: target === 'twitchEmoteAnimated' ? 0 : 1,
+    format,
+    byteLength: bytes,
+  })
+const errorsOf = (issues: ReturnType<typeof targetIssues>) =>
+  issues.filter(({ level }) => level === 'error')
+assert.equal(errorsOf(targetIssues('twitchEmoteAnimated', 60, 30, 'gif', 1024 * 1024)).length, 0)
+assert(
+  targetIssues('twitchEmoteAnimated', 72, 30, 'gif', 100).some(({ message }) =>
+    message.includes('60'),
+  ),
+)
+assert(
+  targetIssues('twitchEmoteAnimated', 60, 60, 'gif', 100).some(({ message }) =>
+    message.includes('30'),
+  ),
+)
+assert(errorsOf(targetIssues('twitchEmoteAnimated', 60, 30, 'gif', 1.2 * 1024 * 1024)).length > 0)
+assert.deepEqual(
+  EXPORT_TARGETS.twitchEmoteAnimated.multiSize?.map(({ width }) => width),
+  [28, 56, 112],
+)
+assert(errorsOf(targetIssues('twitchEmoteStatic', 1, 1, 'png', 30 * 1024)).length > 0)
+assert.equal(errorsOf(targetIssues('twitchEmoteStatic', 1, 1, 'png', 20 * 1024)).length, 0)
+assert.equal(errorsOf(targetIssues('youtubeEmoji', 1, 1, 'png', 500 * 1024)).length, 0)
+assert(
+  targetIssues('youtubeEmoji', 1, 1, 'apng', 100).some(({ message }) => message.includes('靜態')),
+)
+assert(
+  targetIssues('youtubeEmoji', 1, 1, 'png', 100, 600).some(({ message }) =>
+    message.includes('480'),
+  ),
+)
+assert(errorsOf(targetIssues('youtubeEmoji', 1, 1, 'png', 100, 32)).length > 0)
+const twitchFix = autoFixForLine({
+  target: 'twitchEmoteAnimated',
+  canvasWidth: 360,
+  canvasHeight: 360,
+  slots: Array.from({ length: 72 }, (_, layerId) => ({ layerId })),
+  fps: 60,
+  playCount: 0,
+  exportWidth: 112,
+  exportHeight: 112,
+  format: 'gif',
+  identicalToPrev: Array(72).fill(false),
+})
+assert.deepEqual([twitchFix.slots.length, twitchFix.fps], [60, 30])
 
 const fakeGif = new Uint8Array([71, 73, 70])
 let calls = 0

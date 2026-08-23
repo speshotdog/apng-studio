@@ -1,8 +1,12 @@
 import type { ExportPayload, ExportResult } from '../preload/api.js'
 import { composeFrame, ensureBitmap } from './compose.js'
 import { useStore } from './state/store.js'
+import { EXPORT_TARGETS } from '../codec/line.js'
 
-export async function createExportPayload(): Promise<ExportPayload> {
+export async function createExportPayload(size?: {
+  width: number
+  height: number
+}): Promise<ExportPayload> {
   const state = useStore.getState()
   if (!state.doc) throw new Error('請先開啟 .clip 檔案')
   const ids = [
@@ -14,11 +18,13 @@ export async function createExportPayload(): Promise<ExportPayload> {
   ]
   await Promise.all(ids.map(ensureBitmap))
   const current = useStore.getState()
-  let frames = current.slots.map((_, index) => ({
+  const spec = EXPORT_TARGETS[current.lineTarget]
+  const indexes = spec.staticOnly ? [current.staticFrame] : current.slots.map((_, index) => index)
+  let frames = indexes.map((index) => ({
     rgba: composeFrame(
       index,
-      current.exportWidth,
-      current.exportHeight,
+      size?.width ?? current.exportWidth,
+      size?.height ?? current.exportHeight,
       current.scaleMode,
       current,
     ),
@@ -38,8 +44,8 @@ export async function createExportPayload(): Promise<ExportPayload> {
   }
   return {
     format: current.format,
-    width: current.exportWidth,
-    height: current.exportHeight,
+    width: size?.width ?? current.exportWidth,
+    height: size?.height ?? current.exportHeight,
     frames,
     numPlays: current.playCount,
     mergeIdentical: current.mergeIdentical,
@@ -48,6 +54,18 @@ export async function createExportPayload(): Promise<ExportPayload> {
 }
 
 export async function exportTo(filePath?: string): Promise<ExportResult> {
+  const spec = EXPORT_TARGETS[useStore.getState().lineTarget]
+  if (spec.multiSize) {
+    const payloads = await Promise.all(
+      spec.multiSize.map(async (size) => ({
+        suffix: size.suffix,
+        payload: await createExportPayload(size),
+      })),
+    )
+    return filePath
+      ? window.api.exportMultiTo(filePath, payloads)
+      : window.api.saveMultiExport(payloads)
+  }
   const payload = await createExportPayload()
   return filePath ? window.api.exportTo(filePath, payload) : window.api.saveExport(payload)
 }
