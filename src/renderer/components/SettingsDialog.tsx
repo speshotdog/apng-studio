@@ -81,9 +81,16 @@ export function SettingsDialog(props: {
         </p>
         <label className="settings-field">
           使用者名稱（選填）
-          <input value={username} onChange={(event) => setUsername(event.target.value)} />
+          <input
+            value={username}
+            placeholder="沒有 GIPHY 頻道就留空"
+            onChange={(event) => setUsername(event.target.value)}
+          />
         </label>
-        <small>ⓘ 只有 production key 才能指定。</small>
+        <small className={username.trim() ? 'warning' : ''}>
+          ⚠ 沒有 GIPHY 頻道請務必留空。一般（rate-limited）金鑰不能指定頻道， 填了會讓上傳直接被回
+          Unauthorized —— 只有向 GIPHY 申請通過的 production key 才填得。
+        </small>
         <h3>草稿資料夾</h3>
         <div className="settings-test">
           <button
