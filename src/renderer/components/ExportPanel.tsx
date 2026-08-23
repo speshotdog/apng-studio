@@ -9,6 +9,7 @@ import { autoFixForLine } from '../../codec/autofix.js'
 import { askConfirm } from '../prompt.js'
 import { captureEditorState } from '../snapshot.js'
 import { saveCurrentProject } from '../project.js'
+import { TagEditor } from './TagEditor.js'
 
 const clampFps = (value: number): number =>
   Math.max(1, Math.min(60, Number.isFinite(value) ? Math.round(value) : 1))
@@ -16,6 +17,7 @@ const clampFps = (value: number): number =>
 export function ExportPanel(props: {
   settings: PublicSettings | null
   openSettings: () => void
+  onSettingsChanged(settings: PublicSettings): void
 }): React.JSX.Element {
   const state = useStore()
   const {
@@ -37,7 +39,7 @@ export function ExportPanel(props: {
   const frames = state.frameCount()
   const [result, setResult] = useState<ExportResult | null>(null)
   const [busy, setBusy] = useState(false)
-  const [upload, setUpload] = useState<{ bytes: Uint8Array; tags: string } | null>(null)
+  const [upload, setUpload] = useState<{ bytes: Uint8Array; tags: string[] } | null>(null)
   const [giphyResult, setGiphyResult] = useState<GiphyUploadResult | null>(null)
   const targetSpec = EXPORT_TARGETS[lineTarget]
   const resolvedIds = useMemo(
@@ -289,7 +291,7 @@ export function ExportPanel(props: {
         numPlays: payload.numPlays,
         maxColors: payload.gif?.maxColors ?? 256,
       })
-      setUpload({ bytes: encoded.bytes, tags: '' })
+      setUpload({ bytes: encoded.bytes, tags: [] })
     } catch (error) {
       toast('error', `GIF 轉檔失敗：${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -299,14 +301,25 @@ export function ExportPanel(props: {
   const confirmGiphy = async (): Promise<void> => {
     if (!upload) return
     setBusy(true)
-    const done = await window.api.uploadGiphy({ gifBytes: upload.bytes, tags: upload.tags })
-    setGiphyResult(done)
-    setUpload(null)
-    setBusy(false)
-    toast(
-      done.ok ? 'success' : 'error',
-      done.ok ? 'GIPHY 上傳成功' : `GIPHY 上傳失敗：${done.error ?? '未知錯誤'}`,
-    )
+    try {
+      const tags = upload.tags
+      const done = await window.api.uploadGiphy({
+        gifBytes: upload.bytes,
+        tags: tags.join(','),
+      })
+      if (done.ok && tags.length > 0) {
+        await window.api.addRecentTags(tags)
+        props.onSettingsChanged(await window.api.getSettings())
+      }
+      setGiphyResult(done)
+      setUpload(null)
+      toast(
+        done.ok ? 'success' : 'error',
+        done.ok ? 'GIPHY 上傳成功' : `GIPHY 上傳失敗：${done.error ?? '未知錯誤'}`,
+      )
+    } finally {
+      setBusy(false)
+    }
   }
   return (
     <aside className="panel export">
@@ -766,14 +779,15 @@ export function ExportPanel(props: {
               <dt>大小</dt>
               <dd>約 {(upload.bytes.length / 1024).toFixed(0)} KB</dd>
             </dl>
-            <label>
-              標籤
-              <input
-                value={upload.tags}
-                placeholder="可輸入，逗號分隔"
-                onChange={(event) => setUpload({ ...upload, tags: event.target.value })}
+            <p className="giphy-tag-hint">標籤讓別人搜得到這張 GIF，可留空。</p>
+            <div className="giphy-tag-field">
+              <span>標籤</span>
+              <TagEditor
+                tags={upload.tags}
+                onChange={(tags) => setUpload({ ...upload, tags })}
+                suggestions={props.settings?.giphyRecentTags ?? []}
               />
-            </label>
+            </div>
             <footer>
               <button onClick={() => setUpload(null)}>取消</button>
               <button disabled={busy} onClick={() => void confirmGiphy()}>

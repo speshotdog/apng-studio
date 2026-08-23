@@ -953,6 +953,76 @@ async function run(): Promise<void> {
     `window.__smoke.store.getState().set({ screen: 'editor' })`,
   )
 
+  // —— GIPHY 標籤編輯器：真的打開上傳 modal 操作一輪 ——
+  await window.webContents.executeJavaScript(
+    `window.api.setGiphy('smoke-tag-key', '').then(() => window.api.addRecentTags(['以前用過的']))`,
+  )
+  const tagEditor = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    // App 的 settings 是進編輯器時抓的；剛設好金鑰要來回切一次畫面讓它重抓。
+    store.getState().set({ screen: 'start' })
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    store.getState().set({ screen: 'editor', mode: 'animation', lineTarget: 'sticker', format: 'apng' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    document.querySelector('.giphy-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const modal = document.querySelector('.giphy-confirm')
+    if (!modal) return { error: 'GIPHY 上傳 modal 沒打開' }
+    const input = modal.querySelector('.tag-input-row input')
+    if (!input) return { error: 'modal 裡沒有標籤編輯器' }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    const type = (text) => { setter.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })) }
+    // 逗號直接切 chip；Enter 也要能收
+    type('第一個, 第二個')
+    type('第三個')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    // 重複的不收
+    type('第一個')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const chips = [...modal.querySelectorAll('.tag-chip')].map((chip) => chip.textContent.replace('✕', '').trim())
+    // 建議 chip 點了要加入
+    const suggestion = modal.querySelector('.tag-suggestions button')
+    suggestion?.click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const afterSuggestion = modal.querySelectorAll('.tag-chip').length
+    // ✕ 移除
+    modal.querySelector('.tag-chip button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const afterRemove = modal.querySelectorAll('.tag-chip').length
+    modal.querySelector('footer button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    return { chips, hadSuggestion: Boolean(suggestion), afterSuggestion, afterRemove, closed: !document.querySelector('.giphy-confirm') }
+  })()`)
+  assert.equal(tagEditor.error, undefined, tagEditor.error)
+  assert.deepEqual(
+    tagEditor.chips,
+    ['第一個', '第二個', '第三個'],
+    '標籤 chip 內容不對（逗號切割／Enter／去重其中一個壞了）',
+  )
+  assert.equal(tagEditor.hadSuggestion, true, '沒有顯示「最近用過」的建議標籤')
+  assert.equal(tagEditor.afterSuggestion, 4, '點建議標籤沒有加入')
+  assert.equal(tagEditor.afterRemove, 3, '按 ✕ 沒有移除標籤')
+  assert.equal(tagEditor.closed, true, '取消沒有關掉 modal')
+  await window.webContents.executeJavaScript(`(async () => {
+    document.querySelector('.giphy-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const input = document.querySelector('.giphy-confirm .tag-input-row input')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, '狗勾, 貼圖')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  })()`)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await writeFile(
+    join(outputDir, 'ui-giphy-tags.png'),
+    (await window.webContents.capturePage()).toPNG(),
+  )
+  await window.webContents.executeJavaScript(
+    `document.querySelector('.giphy-confirm footer button')?.click()`,
+  )
+  await window.webContents.executeJavaScript(`window.api.clearGiphy()`)
+
   // 煙霧測試用的是真正的 userData，收工前要把自己建的專案清乾淨。
   const leftovers = await window.webContents.executeJavaScript(`(async () => {
     const list = await window.api.listProjects()

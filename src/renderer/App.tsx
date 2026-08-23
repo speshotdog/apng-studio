@@ -171,7 +171,11 @@ export function App(): React.JSX.Element {
             <PreviewStage />
             <Timeline />
           </div>
-          <ExportPanel settings={settings} openSettings={() => setSettingsOpen(true)} />
+          <ExportPanel
+            settings={settings}
+            openSettings={() => setSettingsOpen(true)}
+            onSettingsChanged={setSettings}
+          />
         </>
       ) : (
         <>

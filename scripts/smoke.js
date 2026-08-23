@@ -31637,6 +31637,15 @@ async function write(settings) {
   await writeFile2(path2(), `${JSON.stringify(settings, null, 2)}
 `, "utf8");
 }
+var cleanTags = (tags) => {
+  const seen = /* @__PURE__ */ new Set();
+  return tags.map((tag) => tag.trim()).filter((tag) => {
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 async function getGiphyKey() {
   if (memoryKey) return memoryKey;
   const settings = await read();
@@ -31653,6 +31662,7 @@ async function getPublicSettings() {
   return {
     hasGiphyKey: Boolean(await getGiphyKey()),
     giphyUsername: settings.giphyUsername ?? "",
+    giphyRecentTags: cleanTags(settings.giphyRecentTags ?? []),
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     progressExpanded: settings.progressExpanded ?? false,
     draftFolder: settings.draftFolder ?? ""
@@ -31684,6 +31694,18 @@ async function clearGiphy() {
   delete settings.giphyKeyEncrypted;
   delete settings.giphyKeyPlain;
   settings.giphyUsername = "";
+  await write(settings);
+}
+async function addRecentTags(tags) {
+  const settings = await read();
+  const incoming = cleanTags(tags);
+  const incomingKeys = new Set(incoming.map((tag) => tag.toLowerCase()));
+  settings.giphyRecentTags = [
+    ...incoming,
+    ...cleanTags(settings.giphyRecentTags ?? []).filter(
+      (tag) => !incomingKeys.has(tag.toLowerCase())
+    )
+  ].slice(0, 24);
   await write(settings);
 }
 async function getDraftFolder() {
@@ -31967,6 +31989,7 @@ function registerIpc(getWindow) {
     (_event, key, username) => setGiphy(key, username)
   );
   ipcMain.handle("settings:clearGiphy", () => clearGiphy());
+  ipcMain.handle("settings:addRecentTags", (_event, tags) => addRecentTags(tags));
   ipcMain.handle(
     "settings:setProgressExpanded",
     (_event, expanded) => setProgressExpanded(expanded)
@@ -33042,6 +33065,74 @@ async function run() {
   await window2.webContents.executeJavaScript(
     `window.__smoke.store.getState().set({ screen: 'editor' })`
   );
+  await window2.webContents.executeJavaScript(
+    `window.api.setGiphy('smoke-tag-key', '').then(() => window.api.addRecentTags(['\u4EE5\u524D\u7528\u904E\u7684']))`
+  );
+  const tagEditor = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    // App \u7684 settings \u662F\u9032\u7DE8\u8F2F\u5668\u6642\u6293\u7684\uFF1B\u525B\u8A2D\u597D\u91D1\u9470\u8981\u4F86\u56DE\u5207\u4E00\u6B21\u756B\u9762\u8B93\u5B83\u91CD\u6293\u3002
+    store.getState().set({ screen: 'start' })
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    store.getState().set({ screen: 'editor', mode: 'animation', lineTarget: 'sticker', format: 'apng' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    document.querySelector('.giphy-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const modal = document.querySelector('.giphy-confirm')
+    if (!modal) return { error: 'GIPHY \u4E0A\u50B3 modal \u6C92\u6253\u958B' }
+    const input = modal.querySelector('.tag-input-row input')
+    if (!input) return { error: 'modal \u88E1\u6C92\u6709\u6A19\u7C64\u7DE8\u8F2F\u5668' }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    const type = (text) => { setter.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })) }
+    // \u9017\u865F\u76F4\u63A5\u5207 chip\uFF1BEnter \u4E5F\u8981\u80FD\u6536
+    type('\u7B2C\u4E00\u500B, \u7B2C\u4E8C\u500B')
+    type('\u7B2C\u4E09\u500B')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    // \u91CD\u8907\u7684\u4E0D\u6536
+    type('\u7B2C\u4E00\u500B')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const chips = [...modal.querySelectorAll('.tag-chip')].map((chip) => chip.textContent.replace('\u2715', '').trim())
+    // \u5EFA\u8B70 chip \u9EDE\u4E86\u8981\u52A0\u5165
+    const suggestion = modal.querySelector('.tag-suggestions button')
+    suggestion?.click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const afterSuggestion = modal.querySelectorAll('.tag-chip').length
+    // \u2715 \u79FB\u9664
+    modal.querySelector('.tag-chip button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const afterRemove = modal.querySelectorAll('.tag-chip').length
+    modal.querySelector('footer button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    return { chips, hadSuggestion: Boolean(suggestion), afterSuggestion, afterRemove, closed: !document.querySelector('.giphy-confirm') }
+  })()`);
+  assert.equal(tagEditor.error, void 0, tagEditor.error);
+  assert.deepEqual(
+    tagEditor.chips,
+    ["\u7B2C\u4E00\u500B", "\u7B2C\u4E8C\u500B", "\u7B2C\u4E09\u500B"],
+    "\u6A19\u7C64 chip \u5167\u5BB9\u4E0D\u5C0D\uFF08\u9017\u865F\u5207\u5272\uFF0FEnter\uFF0F\u53BB\u91CD\u5176\u4E2D\u4E00\u500B\u58DE\u4E86\uFF09"
+  );
+  assert.equal(tagEditor.hadSuggestion, true, "\u6C92\u6709\u986F\u793A\u300C\u6700\u8FD1\u7528\u904E\u300D\u7684\u5EFA\u8B70\u6A19\u7C64");
+  assert.equal(tagEditor.afterSuggestion, 4, "\u9EDE\u5EFA\u8B70\u6A19\u7C64\u6C92\u6709\u52A0\u5165");
+  assert.equal(tagEditor.afterRemove, 3, "\u6309 \u2715 \u6C92\u6709\u79FB\u9664\u6A19\u7C64");
+  assert.equal(tagEditor.closed, true, "\u53D6\u6D88\u6C92\u6709\u95DC\u6389 modal");
+  await window2.webContents.executeJavaScript(`(async () => {
+    document.querySelector('.giphy-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    const input = document.querySelector('.giphy-confirm .tag-input-row input')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, '\u72D7\u52FE, \u8CBC\u5716')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  })()`);
+  await new Promise((resolve2) => setTimeout(resolve2, 300));
+  await writeFile4(
+    join5(outputDir, "ui-giphy-tags.png"),
+    (await window2.webContents.capturePage()).toPNG()
+  );
+  await window2.webContents.executeJavaScript(
+    `document.querySelector('.giphy-confirm footer button')?.click()`
+  );
+  await window2.webContents.executeJavaScript(`window.api.clearGiphy()`);
   const leftovers = await window2.webContents.executeJavaScript(`(async () => {
     const list = await window.api.listProjects()
     const mine = list.filter((item) => /^smoke-/.test(item.name) || item.name === 'Smoke \u5FEB\u7167')

@@ -7,6 +7,7 @@ interface StoredSettings {
   /** safeStorage 不可用時的退路：純文字存在使用者自己的設定檔裡（會在 UI 標示）。 */
   giphyKeyPlain?: string
   giphyUsername?: string
+  giphyRecentTags?: string[]
   progressExpanded?: boolean
   draftFolder?: string
 }
@@ -30,6 +31,18 @@ async function write(settings: StoredSettings): Promise<void> {
   await writeFile(path(), `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
 }
 
+const cleanTags = (tags: string[]): string[] => {
+  const seen = new Set<string>()
+  return tags
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      const key = tag.toLowerCase()
+      if (!tag || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
 export async function getGiphyKey(): Promise<string> {
   if (memoryKey) return memoryKey
   const settings = await read()
@@ -46,6 +59,7 @@ export async function getGiphyKey(): Promise<string> {
 export async function getPublicSettings(): Promise<{
   hasGiphyKey: boolean
   giphyUsername: string
+  giphyRecentTags: string[]
   encryptionAvailable: boolean
   progressExpanded: boolean
   draftFolder: string
@@ -54,6 +68,7 @@ export async function getPublicSettings(): Promise<{
   return {
     hasGiphyKey: Boolean(await getGiphyKey()),
     giphyUsername: settings.giphyUsername ?? '',
+    giphyRecentTags: cleanTags(settings.giphyRecentTags ?? []),
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     progressExpanded: settings.progressExpanded ?? false,
     draftFolder: settings.draftFolder ?? '',
@@ -92,6 +107,19 @@ export async function clearGiphy(): Promise<void> {
   delete settings.giphyKeyEncrypted
   delete settings.giphyKeyPlain
   settings.giphyUsername = ''
+  await write(settings)
+}
+
+export async function addRecentTags(tags: string[]): Promise<void> {
+  const settings = await read()
+  const incoming = cleanTags(tags)
+  const incomingKeys = new Set(incoming.map((tag) => tag.toLowerCase()))
+  settings.giphyRecentTags = [
+    ...incoming,
+    ...cleanTags(settings.giphyRecentTags ?? []).filter(
+      (tag) => !incomingKeys.has(tag.toLowerCase()),
+    ),
+  ].slice(0, 24)
   await write(settings)
 }
 

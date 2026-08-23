@@ -463,6 +463,87 @@ header p {
   grid-template-columns: 60px 1fr;
   align-items: center;
 }
+.giphy-tag-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.giphy-tag-field {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-top: 12px;
+}
+.giphy-tag-field > span {
+  padding-top: 7px;
+}
+.tag-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.tag-input-row {
+  min-height: 36px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: #161715;
+}
+.tag-input-row:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px #efb34c44;
+}
+.tag-input-row input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 4px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 5px;
+  padding: 3px 5px 3px 8px;
+  border: 1px solid #514831;
+  border-radius: 999px;
+  background: #2d2a20;
+  color: #f3d59a;
+  overflow-wrap: anywhere;
+}
+.tag-chip button {
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #efb34c33;
+  color: #f3d59a;
+  line-height: 1;
+}
+.tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag-suggestions button {
+  padding: 4px 8px;
+  border-color: var(--edge);
+  background: var(--panel);
+  color: var(--muted);
+}
+.tag-suggestions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .giphy-links p {
   display: grid;
   grid-template-columns: 95px 1fr auto;

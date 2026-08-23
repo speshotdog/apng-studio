@@ -42,6 +42,7 @@ import {
 } from './projects.js'
 import { testGiphyKey, uploadToGiphy } from './giphy.js'
 import {
+  addRecentTags,
   clearGiphy,
   getDraftFolder,
   getGiphyKey,
@@ -356,6 +357,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     setGiphy(key, username),
   )
   ipcMain.handle('settings:clearGiphy', () => clearGiphy())
+  ipcMain.handle('settings:addRecentTags', (_event, tags: string[]) => addRecentTags(tags))
   ipcMain.handle('settings:setProgressExpanded', (_event, expanded: boolean) =>
     setProgressExpanded(expanded),
   )

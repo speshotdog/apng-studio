@@ -15,7 +15,8 @@
     "verify": "tsx scripts/verify-clip.ts",
     "verify:codec": "tsx scripts/verify-codec.ts",
     "verify:formats": "tsx scripts/verify-formats.ts",
-    "verify:all": "npm run verify && npm run verify:codec",
+    "verify:giphy": "tsx scripts/verify-giphy.ts",
+    "verify:all": "npm run verify && npm run verify:codec && npm run verify:giphy",
     "smoke": "electron-vite build && node scripts/build-smoke.mjs && prettier --write scripts/smoke.js && electron scripts/smoke.js",
     "verify:full": "npm run verify:all && npm run smoke",
     "smoke:packaged": "node scripts/smoke-packaged.mjs"

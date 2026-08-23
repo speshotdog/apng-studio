@@ -34,6 +34,7 @@ const api: Api = {
   setGiphy: (key, username) => ipcRenderer.invoke('settings:setGiphy', key, username),
   clearGiphy: () => ipcRenderer.invoke('settings:clearGiphy'),
   testGiphy: () => ipcRenderer.invoke('settings:testGiphy'),
+  addRecentTags: (tags) => ipcRenderer.invoke('settings:addRecentTags', tags),
   setProgressExpanded: (expanded) => ipcRenderer.invoke('settings:setProgressExpanded', expanded),
   uploadGiphy: (payload) => ipcRenderer.invoke('giphy:upload', payload),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),

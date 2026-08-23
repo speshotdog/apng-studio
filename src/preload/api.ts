@@ -51,6 +51,7 @@ export interface ExportResult {
 export interface PublicSettings {
   hasGiphyKey: boolean
   giphyUsername: string
+  giphyRecentTags: string[]
   encryptionAvailable: boolean
   progressExpanded: boolean
   draftFolder: string
@@ -137,6 +138,7 @@ export interface Api {
   setGiphy(key: string, username: string): Promise<{ ok: boolean; error?: string }>
   clearGiphy(): Promise<void>
   testGiphy(): Promise<{ ok: boolean; message: string }>
+  addRecentTags(tags: string[]): Promise<void>
   setProgressExpanded(expanded: boolean): Promise<void>
   uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
   openExternal(url: string): Promise<void>

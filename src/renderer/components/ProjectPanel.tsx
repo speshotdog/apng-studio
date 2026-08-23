@@ -9,11 +9,6 @@ import {
 import { askText } from '../prompt.js'
 import { useStore } from '../state/store.js'
 
-export function timestampName(now = new Date()): string {
-  const pad = (value: number): string => String(value).padStart(2, '0')
-  return `${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`
-}
-
 /**
  * 編輯器頂端的專案列。永遠看得到「現在動的是哪一份」與「存了沒」，
  * 存檔一律存回目前這個專案，不會再問要存去哪。
