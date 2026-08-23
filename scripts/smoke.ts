@@ -11,6 +11,12 @@ import { testGiphyKey } from '../src/main/giphy.js'
 
 const projectRoot = resolve(import.meta.dirname, '..')
 const outputDir = join(projectRoot, 'out', 'smoke')
+
+// 煙霧測試會清 GIPHY 金鑰、建立與刪除專案。以前它跑在真正的 userData 上，
+// 等於每跑一次就把使用者存的金鑰洗掉一次 —— 一定要先改到獨立的暫存目錄。
+// 這行必須在 app ready 之前、在任何 settings/projects 模組讀路徑之前執行。
+app.setPath('userData', join(projectRoot, 'out', 'smoke-userdata'))
+
 let window: BrowserWindow | null = null
 
 interface SmokeSnapshot {
@@ -56,7 +62,9 @@ function gifFrameCount(bytes: Uint8Array): number {
 
 async function run(): Promise<void> {
   await rm(outputDir, { recursive: true, force: true })
+  await rm(app.getPath('userData'), { recursive: true, force: true })
   await mkdir(outputDir, { recursive: true })
+  await mkdir(app.getPath('userData'), { recursive: true })
   const invalidKey = await testGiphyKey('fake-key', async () => new Response('{}', { status: 401 }))
   assert.deepEqual(invalidKey, { ok: false, message: '金鑰無效' })
   registerIpc(() => window)

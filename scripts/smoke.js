@@ -31531,6 +31531,11 @@ var API_ROOT = "https://api.giphy.com/v1/gifs";
 function failure(status, message) {
   if (status === 429 || /rate\s*limit/i.test(message))
     return { ok: false, error: "\u5DF2\u9054\u4E0A\u50B3\u984D\u5EA6\uFF1Bbeta key \u6BCF\u5929\u4E0A\u9650 10 \u6B21" };
+  if (status === 401 || status === 403)
+    return {
+      ok: false,
+      error: "\u91D1\u9470\u88AB GIPHY \u62D2\u7D55\uFF08Unauthorized\uFF09\u3002GIPHY \u7684\u4E00\u822C API key \u9810\u8A2D\u53EA\u80FD\u300C\u8B80\u53D6\u300D\uFF0C\u8981\u4E0A\u50B3\u5FC5\u9808\u5230 developers.giphy.com \u5E6B\u9019\u500B app \u7533\u8ACB\u4E0A\u50B3\u6B0A\u9650\uFF0C\u6216\u6539\u7528\u6709\u4E0A\u50B3\u6B0A\u9650\u7684 production key\u3002\uFF08\u4E5F\u8ACB\u78BA\u8A8D\u91D1\u9470\u6C92\u6709\u8907\u88FD\u5230\u591A\u9918\u7A7A\u767D\uFF09"
+    };
   return { ok: false, error: message || `GIPHY \u56DE\u50B3\u932F\u8AA4\uFF08HTTP ${status}\uFF09` };
 }
 var redact = (message, key) => key ? message.split(key).join("[\u5DF2\u96B1\u85CF]") : message;
@@ -31557,11 +31562,10 @@ async function uploadToGiphy(gifBytes, tags, key, username, fetchImpl = fetch, t
     );
     if (tags.trim()) form.set("tags", tags.trim());
     if (username.trim()) form.set("username", username.trim());
-    const uploaded = await fetchImpl(`${UPLOAD_URL}?api_key=${encodeURIComponent(key)}`, {
-      method: "POST",
-      body: form,
-      signal: controller.signal
-    });
+    const post = (url) => fetchImpl(url, { method: "POST", body: form, signal: controller.signal });
+    let uploaded = await post(UPLOAD_URL);
+    if (uploaded.status === 401 || uploaded.status === 403)
+      uploaded = await post(`${UPLOAD_URL}?api_key=${encodeURIComponent(key)}`);
     const uploadBody = await json(uploaded);
     if (!uploaded.ok) return failure(uploaded.status, uploadBody.meta?.msg ?? "");
     if (typeof uploadBody.meta?.status === "number" && uploadBody.meta.status >= 400)
@@ -32189,6 +32193,7 @@ function registerIpc(getWindow) {
 // scripts/smoke.ts
 var projectRoot = resolve(import.meta.dirname, "..");
 var outputDir = join5(projectRoot, "out", "smoke");
+app3.setPath("userData", join5(projectRoot, "out", "smoke-userdata"));
 var window2 = null;
 function gifFrameCount(bytes) {
   assert.equal(new TextDecoder().decode(bytes.subarray(0, 6)), "GIF89a");
@@ -32221,7 +32226,9 @@ function gifFrameCount(bytes) {
 }
 async function run() {
   await rm2(outputDir, { recursive: true, force: true });
+  await rm2(app3.getPath("userData"), { recursive: true, force: true });
   await mkdir2(outputDir, { recursive: true });
+  await mkdir2(app3.getPath("userData"), { recursive: true });
   const invalidKey = await testGiphyKey("fake-key", async () => new Response("{}", { status: 401 }));
   assert.deepEqual(invalidKey, { ok: false, message: "\u91D1\u9470\u7121\u6548" });
   registerIpc(() => window2);

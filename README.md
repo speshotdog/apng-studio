@@ -81,9 +81,18 @@ APNG Studio 是給動態貼圖使用的排幀與匯出工具。它會在匯出�
 
 ## GIPHY 上傳
 
-在設定裡填好 API Key 後，「上傳到 GIPHY」會先開確認視窗。標籤用 chip 編輯器輸入：
-打字後按 Enter 或逗號新增、✕ 移除、可貼上「a, b, c」自動拆開；
-用過的標籤會記住，下次顯示在「最近用過」直接點選。上傳成功會給 GIPHY 頁面與直連網址。
+在設定裡填好 API Key 後，「上傳到 GIPHY」會先開確認視窗。
+
+> **GIPHY 金鑰要有上傳權限。** developers.giphy.com 預設發的 API key 只能「讀取」，
+> 拿去上傳會被回 `Unauthorized`。要上傳得在該站幫這個 app 申請上傳權限，
+> 或改用有上傳權限的 production key。想單獨測金鑰能不能上傳，可以跑
+> `GIPHY_API_KEY=你的金鑰 npm run try:giphy -- 某個.clip`，
+> 它會用真的檔案產一支 GIF 打真的 API，並告訴你是金鑰權限還是程式的問題。
+> 另外開發版與打包版的設定是分開存的（`%APPDATA%\Electron` 與 `%APPDATA%\APNG Studio`），
+> 金鑰不會互通。
+> 標籤用 chip 編輯器輸入：
+> 打字後按 Enter 或逗號新增、✕ 移除、可貼上「a, b, c」自動拆開；
+> 用過的標籤會記住，下次顯示在「最近用過」直接點選。上傳成功會給 GIPHY 頁面與直連網址。
 
 ## 貼圖組
 
