@@ -70,3 +70,9 @@ declare module 'gifenc' {
 }
 
 declare module '*.css'
+
+// Vite 會把圖檔轉成 URL 字串（開場畫面的 app 圖示用得到）。
+declare module '*.png' {
+  const url: string
+  export default url
+}

@@ -34,6 +34,40 @@ export interface EditorState {
   gifColors?: number
 }
 
+/** 專案清單用的輕量資訊，不含狀態本體。 */
+export interface ProjectMeta {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+  sourcePath: string
+  sourceName: string
+  /** 有沒有比正式存檔更新的自動存檔 */
+  hasAutosave: boolean
+  autosaveAt: string | null
+}
+
+/** 專案清單項目（附縮圖 data URL）。 */
+export interface ProjectListItem extends ProjectMeta {
+  thumbnail: string | null
+}
+
+/** 一個專案完整存下來的東西。 */
+export interface ProjectBlob {
+  state: EditorState
+  pack?: {
+    target: ExportTarget
+    count: number
+    cells: Array<{
+      index: number | 'main' | 'tab'
+      sourcePath?: string
+      pngBase64?: string
+      editor?: PackCellEditor
+    }>
+  }
+}
+
+/** v0.1／v0.2 的舊存檔格式，只在匯入時用得到。 */
 export interface ProjectSnapshot {
   id: string
   name: string

@@ -71,6 +71,9 @@ async function run(): Promise<void> {
       sandbox: false,
     },
   })
+  window.webContents.on('console-message', (_event, level, message) => {
+    if (level >= 2) console.error(`[renderer] ${message}`)
+  })
   await window.loadFile(join(projectRoot, 'out', 'renderer', 'index.html'), {
     query: { smoke: '1' },
   })
@@ -181,44 +184,87 @@ async function run(): Promise<void> {
   assert.ok(nonSquareMemory.plurkZoom > 1)
   assert.equal(nonSquareMemory.stickerZoom, 1)
 
+  // —— 存檔機制：存回目前專案、自動存檔、復原 ——
   const saveProgress = await window.webContents.executeJavaScript(`(async () => {
-    const store = window.__smoke.store
-    const before = (await window.api.listProjects()).length
-    document.querySelector('.project-heading button').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    const input = document.querySelector('.text-prompt input')
-    if (!input) return { error: '沒有跳出輸入名稱的對話框（Electron 不支援 window.prompt）' }
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-    setter.call(input, 'smoke-progress')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    document.querySelector('.text-prompt .prompt-confirm').click()
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const saved = await window.api.listProjects()
+    const smoke = window.__smoke, store = smoke.store
+    const project = store.getState().project
+    if (!project) return { error: '編輯器沒有綁定專案' }
+    store.getState().set({ fps: 17 })
+    const dirtyAfterEdit = store.getState().dirty
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const saved = await window.api.readProject(project.id)
+    const list = await window.api.listProjects()
     return {
-      before,
-      after: saved.length,
-      named: saved.some((item) => item.name === 'smoke-progress'),
-      hasTracks: Boolean(saved.find((item) => item.name === 'smoke-progress')?.state?.tracks?.length),
-      dirty: store.getState().dirty,
+      dirtyAfterEdit,
+      dirtyAfterSave: store.getState().dirty,
+      savedFps: saved?.state?.fps,
+      hasTracks: Boolean(saved?.state?.tracks?.length),
+      listed: list.some((item) => item.id === project.id),
+      thumbnail: Boolean(list.find((item) => item.id === project.id)?.thumbnail),
       toast: document.querySelector('.toast-success p')?.textContent ?? '',
     }
   })()`)
   assert.equal(saveProgress.error, undefined, saveProgress.error)
-  assert.equal(saveProgress.after, saveProgress.before + 1, '儲存進度沒有真的寫進去')
-  assert.ok(saveProgress.named, '存下來的進度名稱不對')
-  assert.ok(saveProgress.hasTracks, '存下來的進度沒有帶到圖層軌道')
-  assert.equal(saveProgress.dirty, false, '存檔後不應再被視為有未存檔變更')
-  assert.match(saveProgress.toast, /已儲存進度/)
-  await window.webContents.executeJavaScript(
-    `window.api.listProjects().then((list) => Promise.all(list.filter((item) => item.name === 'smoke-progress').map((item) => window.api.deleteProject(item.id))))`,
-  )
+  assert.equal(saveProgress.dirtyAfterEdit, true, '改了 FPS 之後應該要被視為有未存檔變更')
+  assert.equal(saveProgress.dirtyAfterSave, false, '存檔後不應再被視為有未存檔變更')
+  assert.equal(saveProgress.savedFps, 17, '存進專案的內容不是當下的狀態')
+  assert.ok(saveProgress.hasTracks, '存下來的專案沒有帶到圖層軌道')
+  assert.ok(saveProgress.listed, '專案沒有出現在清單裡')
+  assert.ok(saveProgress.thumbnail, '專案沒有存到縮圖')
+  assert.match(saveProgress.toast, /已儲存/)
+
+  // 自動存檔不可以蓋掉正式存檔，而且正式存檔一次就要把它清掉。
+  const autosaveFlow = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
+    store.getState().set({ fps: 23 })
+    await window.api.autosaveProject(id, smoke.captureBlob())
+    const pending = await window.api.readProjectAutosave(id)
+    const stillSaved = await window.api.readProject(id)
+    const listedDuring = (await window.api.listProjects()).find((item) => item.id === id)
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    return {
+      pendingFps: pending?.state?.state?.fps,
+      untouchedFps: stillSaved?.state?.fps,
+      flagged: listedDuring?.hasAutosave,
+      clearedAfterSave: await window.api.readProjectAutosave(id),
+      savedFps: (await window.api.readProject(id))?.state?.fps,
+    }
+  })()`)
+  assert.equal(autosaveFlow.pendingFps, 23, '自動存檔沒有存到當下狀態')
+  assert.equal(autosaveFlow.untouchedFps, 17, '自動存檔不可以動到正式存檔')
+  assert.equal(autosaveFlow.flagged, true, '專案清單沒有標示出有較新的自動存檔')
+  assert.equal(autosaveFlow.clearedAfterSave, null, '正式存檔後應該清掉自動存檔')
+  assert.equal(autosaveFlow.savedFps, 23, '正式存檔沒有寫入最新狀態')
+
+  // 有未存檔變更時離開編輯器要被攔下來。
+  const leaveGuard = await window.webContents.executeJavaScript(`(async () => {
+    const store = window.__smoke.store
+    store.getState().set({ fps: 11 })
+    document.querySelector('.project-bar .project-buttons button:last-child').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const asked = Boolean(document.querySelector('.text-prompt'))
+    document.querySelector('.text-prompt footer button')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const screenAfterCancel = store.getState().screen
+    store.getState().set({ fps: 17, dirty: false })
+    return { asked, screenAfterCancel }
+  })()`)
+  assert.equal(leaveGuard.asked, true, '有未存檔變更時離開編輯器必須先問')
+  assert.equal(leaveGuard.screenAfterCancel, 'editor', '按取消不該離開編輯器')
 
   const badPath = join(outputDir, 'broken.clip')
   await writeFile(badPath, (await readFile(samplePath)).subarray(0, 5000))
   const badClip = await window.webContents.executeJavaScript(`(async () => {
     const before = window.__smoke.store.getState().doc.filePath
     window.__smoke.store.getState().set({ dirty: false })
-    await window.__smoke.openClipUi(${JSON.stringify(badPath)})
+    // 換來源檔會先跳自製確認框，測試要自己按下去。
+    const pending = window.__smoke.openClipUi(${JSON.stringify(badPath)})
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    document.querySelector('.text-prompt .prompt-confirm')?.click()
+    await pending
     await window.__smoke.waitIdle()
     return { before, after: window.__smoke.store.getState().doc.filePath, error: document.querySelector('.toast-error p')?.textContent ?? '', root: Boolean(document.querySelector('#root .app')) }
   })()`)
@@ -639,29 +685,22 @@ async function run(): Promise<void> {
   )
 
   const snapshotResult = await window.webContents.executeJavaScript(`(async () => {
-    for (const item of await window.api.listProjects()) await window.api.deleteProject(item.id)
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
     const target = document.querySelector('.line-targets'); target.value = 'youtubeEmoji'; target.dispatchEvent(new Event('change', { bubbles: true }))
-    await window.__smoke.waitIdle()
-    window.__smoke.store.getState().set({ staticFrame: 2, gifColors: 64 })
-    window.confirm = () => true
-    document.querySelector('.project-heading button').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    const input = document.querySelector('.text-prompt input')
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-    setter.call(input, 'Smoke 快照')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    document.querySelector('.text-prompt .prompt-confirm').click()
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const saved = await window.api.listProjects()
-    window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
-    document.querySelector('.project-row').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    document.querySelector('.text-prompt .prompt-confirm')?.click()
-    await new Promise((resolve) => setTimeout(resolve, 400)); await window.__smoke.waitIdle()
-    const restored = window.__smoke.store.getState()
-    return { count: saved.length, staticFrame: restored.staticFrame, gifColors: restored.gifColors }
+    await smoke.waitIdle()
+    store.getState().set({ staticFrame: 2, gifColors: 64 })
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // 亂改一通之後，把存檔讀回來必須還原成存檔當下的樣子。
+    store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
+    const blob = await window.api.readProject(id)
+    await smoke.applyBlob(blob)
+    await smoke.waitIdle()
+    const restored = store.getState()
+    return { staticFrame: restored.staticFrame, gifColors: restored.gifColors, dirty: restored.dirty }
   })()`)
-  assert.deepEqual(snapshotResult, { count: 1, staticFrame: 2, gifColors: 64 })
+  assert.deepEqual(snapshotResult, { staticFrame: 2, gifColors: 64, dirty: false })
 
   const extremes = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
@@ -854,6 +893,74 @@ async function run(): Promise<void> {
   assert.equal(packRoundTrip.pointerEvents, 'auto', '輸出目標下拉選單收不到滑鼠事件')
   assert.equal(packRoundTrip.covered, null, `輸出目標下拉選單被 ${packRoundTrip.covered} 蓋住`)
   assert.ok(packRoundTrip.width > 100, `輸出目標下拉選單只有 ${packRoundTrip.width}px 寬`)
+
+  // —— 專案選擇畫面：整趟走一次「離開 → 從列表點回來」——
+  const startScreen = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
+    const projectName = store.getState().project.name
+    store.getState().set({ mode: 'animation', fps: 19 })
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // 已存檔就不該再攔人。
+    document.querySelector('.project-bar .project-buttons button:last-child').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const blockedByDialog = Boolean(document.querySelector('.text-prompt'))
+    const onStart = Boolean(document.querySelector('.start-screen'))
+    const projectCleared = store.getState().project === null
+    const cardCount = document.querySelectorAll('.start-card').length
+    const named = [...document.querySelectorAll('.start-card .start-meta b')].map((n) => n.textContent)
+    const thumbs = document.querySelectorAll('.start-card .start-thumb img').length
+    // 從列表點回去，狀態要跟存檔當下一樣。
+    const cards = [...document.querySelectorAll('.start-card')]
+    cards[named.indexOf(projectName)]?.click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    await smoke.waitIdle()
+    return {
+      blockedByDialog,
+      onStart,
+      cards: cardCount,
+      thumbs,
+      backInEditor: Boolean(document.querySelector('.app .project-bar')),
+      fps: store.getState().fps,
+      dirty: store.getState().dirty,
+      clearedOnLeave: projectCleared,
+      sameProject: store.getState().project?.id === id,
+    }
+  })()`)
+  assert.equal(startScreen.blockedByDialog, false, '已存檔還被攔下來問要不要存')
+  assert.equal(startScreen.onStart, true, '離開編輯器後沒有回到專案選擇畫面')
+  assert.ok(startScreen.cards >= 1, '專案選擇畫面沒有列出任何專案')
+  assert.ok(startScreen.thumbs >= 1, '專案卡片沒有縮圖')
+  assert.equal(startScreen.backInEditor, true, '點專案卡片沒有進到編輯器')
+  assert.equal(startScreen.clearedOnLeave, true, '回到專案列表時應該放掉目前專案')
+  assert.equal(startScreen.sameProject, true, '點回來的不是同一個專案')
+  assert.equal(startScreen.fps, 19, '從專案列表開回來的狀態不是存檔當下的內容')
+  assert.equal(startScreen.dirty, false, '剛開啟的專案不該是未存檔狀態')
+
+  const startVisible = await window.webContents.executeJavaScript(`(async () => {
+    const store = window.__smoke.store
+    store.getState().set({ screen: 'start', toasts: [] })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    // 整棵樹換掉之後畫面要真的重繪過，不然 capturePage 會拍到上一張。
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    return Boolean(document.querySelector('.start-screen .start-card'))
+  })()`)
+  assert.equal(startVisible, true, '切到專案列表後畫面上沒有專案卡片')
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  await writeFile(join(outputDir, 'ui-start.png'), (await window.webContents.capturePage()).toPNG())
+  await window.webContents.executeJavaScript(
+    `window.__smoke.store.getState().set({ screen: 'editor' })`,
+  )
+
+  // 煙霧測試用的是真正的 userData，收工前要把自己建的專案清乾淨。
+  const leftovers = await window.webContents.executeJavaScript(`(async () => {
+    const list = await window.api.listProjects()
+    const mine = list.filter((item) => /^smoke-/.test(item.name) || item.name === 'Smoke 快照')
+    for (const item of mine) await window.api.deleteProject(item.id)
+    return { removed: mine.length, remaining: (await window.api.listProjects()).length }
+  })()`)
+  assert.equal(leftovers.remaining, 0, `煙霧測試留下了 ${leftovers.remaining} 個專案沒清掉`)
 
   console.table({
     cels: snapshot.celNames.join(', '),

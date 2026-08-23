@@ -1,9 +1,13 @@
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, dialog, Menu, ipcMain } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { registerIpc } from './ipc.js'
+import { migrateLegacyProjects } from './projects.js'
 import type { MenuCommand } from '../preload/api.js'
 let mainWindow: BrowserWindow | null = null
+/** renderer 隨時回報有沒有未存檔的變更，關視窗前才問得出正確的問題。 */
+let hasUnsaved = false
+let allowClose = false
 function send(command: MenuCommand): void {
   mainWindow?.webContents.send('menu:command', command)
 }
@@ -53,12 +57,43 @@ async function createWindow(): Promise<void> {
     )
     app.quit()
   }
+  mainWindow.on('close', (event) => {
+    const target = mainWindow
+    if (!target || allowClose || !hasUnsaved) return
+    // 只用 beforeUnload 擋的話視窗會「按了沒反應」，使用者根本不知道發生什麼事。
+    event.preventDefault()
+    void dialog
+      .showMessageBox(target, {
+        type: 'warning',
+        buttons: ['儲存後關閉', '不儲存直接關閉', '取消'],
+        defaultId: 0,
+        cancelId: 2,
+        message: '有未儲存的變更',
+        detail: '要先存回目前的專案再關閉嗎？',
+      })
+      .then(async ({ response }) => {
+        if (response === 2) return
+        if (response === 0) {
+          await target.webContents
+            .executeJavaScript('window.__saveBeforeClose && window.__saveBeforeClose()')
+            .catch((error: unknown) => console.warn(`關閉前存檔失敗：${String(error)}`))
+        }
+        allowClose = true
+        target.close()
+      })
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })
 }
 app.whenReady().then(() => {
+  ipcMain.on('window:dirty', (_event, value: boolean) => {
+    hasUnsaved = value
+  })
   registerIpc(() => mainWindow)
+  void migrateLegacyProjects().then((count) => {
+    if (count) console.log(`已把 ${count} 筆舊版進度匯入新的專案結構`)
+  })
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
@@ -71,6 +106,9 @@ app.whenReady().then(() => {
             click: () => send('open'),
           },
           { label: '草稿資料夾…', accelerator: 'CmdOrCtrl+D', click: () => send('drafts') },
+          { type: 'separator' },
+          { label: '儲存專案', accelerator: 'CmdOrCtrl+S', click: () => send('save') },
+          { label: '回到專案列表', click: () => send('projects') },
           { type: 'separator' },
           { label: '匯出 APNG', accelerator: 'CmdOrCtrl+E', click: () => send('export-apng') },
           { label: '匯出 GIF', click: () => send('export-gif') },

@@ -12,9 +12,16 @@ const api: Api = {
     ipcRenderer.invoke('export:multiTo', folderPath, payloads),
   saveMultiZip: (payloads) => ipcRenderer.invoke('export:saveMultiZip', payloads),
   listProjects: () => ipcRenderer.invoke('project:list'),
-  saveProject: (snapshot) => ipcRenderer.invoke('project:save', snapshot),
+  readProject: (id) => ipcRenderer.invoke('project:read', id),
+  createProject: (input) => ipcRenderer.invoke('project:create', input),
+  saveProject: (id, state, thumbnailDataUrl) =>
+    ipcRenderer.invoke('project:save', id, state, thumbnailDataUrl),
+  autosaveProject: (id, state) => ipcRenderer.invoke('project:autosave', id, state),
+  readProjectAutosave: (id) => ipcRenderer.invoke('project:readAutosave', id),
+  discardProjectAutosave: (id) => ipcRenderer.invoke('project:discardAutosave', id),
   deleteProject: (id) => ipcRenderer.invoke('project:delete', id),
   renameProject: (id, name) => ipcRenderer.invoke('project:rename', id, name),
+  duplicateProject: (id, name) => ipcRenderer.invoke('project:duplicate', id, name),
   importPackFolder: (path) => ipcRenderer.invoke('project:importFolder', path),
   hydratePackCells: (cells) => ipcRenderer.invoke('project:hydratePackCells', cells),
   exportPack: (filePath, cells, target) =>
@@ -22,6 +29,7 @@ const api: Api = {
   listDrafts: (folder) => ipcRenderer.invoke('drafts:list', folder),
   pickDraftFolder: () => ipcRenderer.invoke('drafts:pick'),
   encodeForPack: (payload) => ipcRenderer.invoke('pack:encode', payload),
+  readPackImage: (source) => ipcRenderer.invoke('pack:readImage', source),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setGiphy: (key, username) => ipcRenderer.invoke('settings:setGiphy', key, username),
   clearGiphy: () => ipcRenderer.invoke('settings:clearGiphy'),
@@ -29,6 +37,7 @@ const api: Api = {
   setProgressExpanded: (expanded) => ipcRenderer.invoke('settings:setProgressExpanded', expanded),
   uploadGiphy: (payload) => ipcRenderer.invoke('giphy:upload', payload),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  setDirty: (dirty) => ipcRenderer.send('window:dirty', dirty),
   onMenuCommand: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, command: MenuCommand) => callback(command)
     ipcRenderer.on('menu:command', listener)

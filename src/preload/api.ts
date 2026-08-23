@@ -1,5 +1,11 @@
 import type { ApngInfo } from '../codec/apng.js'
-import type { PackImportResult, ProjectSnapshot } from '../project/types.js'
+import type {
+  PackImportResult,
+  ProjectBlob,
+  ProjectListItem,
+  ProjectMeta,
+  ProjectSnapshot,
+} from '../project/types.js'
 export interface LayerNode {
   id: number
   name: string
@@ -49,7 +55,8 @@ export interface PublicSettings {
   progressExpanded: boolean
   draftFolder: string
 }
-export type MenuCommand = 'open' | 'new' | 'drafts' | 'export-apng' | 'export-gif' | 'settings'
+export type MenuCommand =
+  'open' | 'new' | 'drafts' | 'save' | 'projects' | 'export-apng' | 'export-gif' | 'settings'
 /** 草稿資料夾裡的一個可開啟檔案。 */
 export interface DraftEntry {
   filePath: string
@@ -97,10 +104,22 @@ export interface Api {
     payloads: Array<{ suffix: string; payload: ExportPayload }>,
   ): Promise<ExportResult>
   saveMultiZip(payloads: Array<{ suffix: string; payload: ExportPayload }>): Promise<ExportResult>
-  listProjects(): Promise<ProjectSnapshot[]>
-  saveProject(snapshot: ProjectSnapshot): Promise<ProjectSnapshot[]>
-  deleteProject(id: string): Promise<ProjectSnapshot[]>
-  renameProject(id: string, name: string): Promise<ProjectSnapshot[]>
+  listProjects(): Promise<ProjectListItem[]>
+  readProject(id: string): Promise<ProjectBlob | null>
+  createProject(input: {
+    name: string
+    sourcePath: string
+    sourceName: string
+    state: ProjectBlob
+    thumbnailDataUrl?: string
+  }): Promise<ProjectMeta>
+  saveProject(id: string, state: ProjectBlob, thumbnailDataUrl?: string): Promise<ProjectMeta>
+  autosaveProject(id: string, state: ProjectBlob): Promise<void>
+  readProjectAutosave(id: string): Promise<{ state: ProjectBlob; savedAt: string } | null>
+  discardProjectAutosave(id: string): Promise<void>
+  deleteProject(id: string): Promise<ProjectMeta[]>
+  renameProject(id: string, name: string): Promise<ProjectMeta[]>
+  duplicateProject(id: string, name: string): Promise<ProjectMeta>
   importPackFolder(path?: string): Promise<PackImportResult | null>
   hydratePackCells(
     cells: NonNullable<ProjectSnapshot['pack']>['cells'],
@@ -113,6 +132,7 @@ export interface Api {
   listDrafts(folder?: string): Promise<DraftListing | null>
   pickDraftFolder(): Promise<string | null>
   encodeForPack(payload: ExportPayload): Promise<PackEncoded>
+  readPackImage(source: { filePath?: string; bytes?: Uint8Array }): Promise<PackEncoded>
   getSettings(): Promise<PublicSettings>
   setGiphy(key: string, username: string): Promise<{ ok: boolean; error?: string }>
   clearGiphy(): Promise<void>
@@ -120,5 +140,6 @@ export interface Api {
   setProgressExpanded(expanded: boolean): Promise<void>
   uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
   openExternal(url: string): Promise<void>
+  setDirty(dirty: boolean): void
   onMenuCommand(callback: (command: MenuCommand) => void): () => void
 }

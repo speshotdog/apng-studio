@@ -8,7 +8,7 @@ import { useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
 import { askConfirm } from '../prompt.js'
 import { captureEditorState } from '../snapshot.js'
-import { saveCurrentSnapshot, timestampName } from './ProjectPanel.js'
+import { saveCurrentProject } from '../project.js'
 
 const clampFps = (value: number): number =>
   Math.max(1, Math.min(60, Number.isFinite(value) ? Math.round(value) : 1))
@@ -252,7 +252,8 @@ export function ExportPanel(props: {
       ))
     )
       return
-    await saveCurrentSnapshot(`一鍵符合規範前_${timestampName()}`)
+    // 補幀會大改影格，先把現況存回專案，按錯還有 Ctrl+Z 與已存檔可退。
+    await saveCurrentProject()
     state.commit()
     // 補幀後的順序要同時套到每一條軌道，多軌的動作才不會被拆散。
     set({

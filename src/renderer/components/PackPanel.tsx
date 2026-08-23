@@ -50,6 +50,44 @@ export function PackPanel(): React.JSX.Element {
     state.toast(result.skipped.length ? 'info' : 'success', packImportMessage(result))
   }
 
+  /**
+   * 把拖進來的外部 PNG 放進指定格子。main／tab 也吃這條，
+   * 所以商品圖片可以直接從檔案總管拖上去。
+   */
+  const dropImage = async (
+    index: number | 'main' | 'tab',
+    files: FileList | null,
+  ): Promise<boolean> => {
+    const file = files?.[0]
+    if (!file) return false
+    if (!/\.(png|apng)$/i.test(file.name)) {
+      state.toast('error', `${file.name} 不是 PNG，貼圖組只吃 PNG／APNG`)
+      return true
+    }
+    try {
+      const filePath = window.api.getPathForFile(file)
+      const encoded = await window.api.readPackImage(
+        filePath ? { filePath } : { bytes: new Uint8Array(await file.arrayBuffer()) },
+      )
+      state.set({
+        packCells: [
+          ...state.packCells.filter((cell) => cell.index !== index),
+          { index, sourcePath: filePath ?? '', ...encoded },
+        ],
+      })
+      state.toast(
+        'success',
+        `已放入 ${typeof index === 'number' ? String(index).padStart(2, '0') : index}：${file.name}`,
+      )
+    } catch (error) {
+      state.toast(
+        'error',
+        `${file.name} 讀取失敗：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    return true
+  }
+
   /** 把編號格重新排序：把 from 抽出來插到 to，其餘往後遞補，然後重新編號。 */
   const reorder = (from: number, to: number): void => {
     if (from === to) return
@@ -129,6 +167,12 @@ export function PackPanel(): React.JSX.Element {
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault()
+          if (event.dataTransfer.files.length) {
+            // 別讓全域的「開啟來源檔」處理器搶走這個 drop。
+            event.stopPropagation()
+            void dropImage(index, event.dataTransfer.files)
+            return
+          }
           const from = Number(event.dataTransfer.getData('application/x-pack-index'))
           if (from) reorder(from, index)
         }}
@@ -209,6 +253,7 @@ export function PackPanel(): React.JSX.Element {
       {state.packTarget !== 'plurkEmoticon' && (
         <section className="pack-accessories">
           <h3>商品圖片</h3>
+          <p className="pack-note">main 與 tab 可以直接從檔案總管把 PNG 拖進來。</p>
           <div
             className="pack-grid"
             style={{ '--pack-cell-size': `${thumbSize}px` } as React.CSSProperties}
@@ -218,8 +263,14 @@ export function PackPanel(): React.JSX.Element {
               const error = errorFor(cell, index, state.packTarget)
               return (
                 <article
-                  className={`pack-cell ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''}`}
+                  className={`pack-cell droppable ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''}`}
                   key={index}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    void dropImage(index, event.dataTransfer.files)
+                  }}
                 >
                   {cell && <img src={`data:image/png;base64,${cell.pngBase64}`} />}
                   <b>{index}</b>
@@ -230,6 +281,7 @@ export function PackPanel(): React.JSX.Element {
                         ? '240×240（主要圖片）'
                         : '96×74（聊天縮圖）'}
                   </small>
+                  {!cell && <i className="drop-hint">把 PNG 拖進來</i>}
                   {error && error !== '尚未匯入' && <span>{error}</span>}
                 </article>
               )

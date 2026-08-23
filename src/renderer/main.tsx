@@ -5,6 +5,7 @@ import { allLayerIds, composeFrame, ensureBitmap } from './compose.js'
 import { createExportPayload, exportTo } from './export.js'
 import { encodeGif } from '../codec/gif.js'
 import { packImportMessage } from './packMessage.js'
+import { applyBlob, captureBlob } from './project.js'
 import { useStore } from './state/store.js'
 import './styles.css'
 import './panels.css'
@@ -25,10 +26,21 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
   ;(window as unknown as { __smoke: unknown }).__smoke = {
     packImportMessage,
     store: useStore,
+    // 編輯器只在「有專案」時存在，所以測試入口也要先建一個專案再進去。
     openClip: async (path: string) => {
       const doc = await window.api.openClip(path)
       if (!doc) throw new Error('無法開啟測試檔案')
       useStore.getState().open(doc)
+      const meta = await window.api.createProject({
+        name: `smoke-${Date.now()}`,
+        sourcePath: doc.filePath,
+        sourceName: doc.filePath.split(/[\/]/).at(-1) ?? '',
+        state: captureBlob(),
+      })
+      useStore.getState().set({ project: meta, screen: 'editor', dirty: false })
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      )
       return doc
     },
     getAnimationCels: animationCels,
@@ -45,6 +57,8 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     },
     exportTo,
     composeFrame,
+    captureBlob,
+    applyBlob,
     // renderer 端的 GIF 編碼（GIPHY 上傳走這條），跟主程序是不同的 gifenc build。
     encodeGifHere: async () => {
       const payload = await createExportPayload()

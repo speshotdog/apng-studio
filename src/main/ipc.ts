@@ -21,9 +21,25 @@ import type {
   LayerNode,
   PackEncoded,
 } from '../preload/api.js'
-import type { PackImportCell, PackImportResult, ProjectSnapshot } from '../project/types.js'
+import type {
+  PackImportCell,
+  PackImportResult,
+  ProjectBlob,
+  ProjectSnapshot,
+} from '../project/types.js'
 import type { ExportTarget } from '../codec/line.js'
-import { deleteProject, listProjects, renameProject, saveProject } from './projects.js'
+import {
+  autosaveProject,
+  createProject,
+  deleteProject,
+  discardProjectAutosave,
+  duplicateProject,
+  listProjects,
+  readProject,
+  readProjectAutosave,
+  renameProject,
+  saveProject,
+} from './projects.js'
 import { testGiphyKey, uploadToGiphy } from './giphy.js'
 import {
   clearGiphy,
@@ -363,9 +379,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return shell.openExternal(parsed.toString())
   })
   ipcMain.handle('project:list', () => listProjects())
-  ipcMain.handle('project:save', (_event, snapshot: ProjectSnapshot) => saveProject(snapshot))
+  ipcMain.handle('project:read', (_event, id: string) => readProject(id))
+  ipcMain.handle('project:create', (_event, input: Parameters<typeof createProject>[0]) =>
+    createProject(input),
+  )
+  ipcMain.handle(
+    'project:save',
+    (_event, id: string, state: ProjectBlob, thumbnailDataUrl?: string) =>
+      saveProject(id, state, thumbnailDataUrl),
+  )
+  ipcMain.handle('project:autosave', (_event, id: string, state: ProjectBlob) =>
+    autosaveProject(id, state),
+  )
+  ipcMain.handle('project:readAutosave', (_event, id: string) => readProjectAutosave(id))
+  ipcMain.handle('project:discardAutosave', (_event, id: string) => discardProjectAutosave(id))
   ipcMain.handle('project:delete', (_event, id: string) => deleteProject(id))
   ipcMain.handle('project:rename', (_event, id: string, name: string) => renameProject(id, name))
+  ipcMain.handle('project:duplicate', (_event, id: string, name: string) =>
+    duplicateProject(id, name),
+  )
   ipcMain.handle('project:importFolder', (_event, requested?: string) =>
     importPackFolder(requested),
   )
@@ -464,6 +496,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     writeMultiExport(getWindow, folder, payloads),
   )
   ipcMain.handle('export:saveMultiZip', (_event, payloads) => saveMultiZip(getWindow, payloads))
+  ipcMain.handle(
+    'pack:readImage',
+    async (_event, source: { filePath?: string; bytes?: Uint8Array }): Promise<PackEncoded> => {
+      const bytes = source.filePath
+        ? new Uint8Array(await readFile(source.filePath))
+        : new Uint8Array(source.bytes ?? [])
+      // pngInfo 會擋掉非 PNG，錯誤訊息直接回給使用者。
+      const info = pngInfo(bytes)
+      return {
+        pngBase64: Buffer.from(bytes).toString('base64'),
+        byteLength: bytes.length,
+        ...info,
+      }
+    },
+  )
   ipcMain.handle('pack:encode', (_event, payload: ExportPayload): PackEncoded => {
     const encoded = encodeExport(payload)
     return {

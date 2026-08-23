@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { ClipSummary, LayerNode } from '../../preload/api.js'
 import type { ExportTarget } from '../../codec/line.js'
-import type { PackImportCell } from '../../project/types.js'
+import type { PackImportCell, ProjectMeta } from '../../project/types.js'
 export type ScaleMode = 'smooth' | 'pixel'
 export interface Slot {
   layerId: number | null
@@ -52,6 +52,10 @@ export interface EditSnapshot {
 }
 
 export interface State {
+  /** 啟動先停在專案選擇畫面，選定或建立專案後才進編輯器。 */
+  screen: 'start' | 'editor'
+  /** 目前開著的專案；編輯器裡任何存檔都是存回這一份，不會再問要存到哪。 */
+  project: ProjectMeta | null
   doc: ClipSummary | null
   bitmaps: Map<string, ImageBitmap>
   visibility: Map<number, boolean>
@@ -195,6 +199,8 @@ const makeInitial = () => ({
 
 export const useStore = create<State>((set, get) => ({
   ...makeInitial(),
+  screen: 'start' as const,
+  project: null as ProjectMeta | null,
   toasts: [],
   set: (values) =>
     set(
@@ -212,6 +218,8 @@ export const useStore = create<State>((set, get) => ({
     set({
       ...makeInitial(),
       toasts: get().toasts,
+      screen: get().screen,
+      project: get().project,
       doc,
       visibility,
       tracks: [newTrack('圖層 1', 8)],
@@ -220,7 +228,13 @@ export const useStore = create<State>((set, get) => ({
       exportHeight: doc.canvas.height,
     })
   },
-  reset: () => set({ ...makeInitial(), toasts: get().toasts }),
+  reset: () =>
+    set({
+      ...makeInitial(),
+      toasts: get().toasts,
+      screen: get().screen,
+      project: get().project,
+    }),
   setBitmap: (id, bitmap) => set((state) => ({ bitmaps: new Map(state.bitmaps).set(id, bitmap) })),
   setSlot: (index, layerId) => {
     get().commit()

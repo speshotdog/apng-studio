@@ -1,48 +1,81 @@
 import { app } from 'electron'
-import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ProjectSnapshot } from '../project/types.js'
+import type { ProjectBlob, ProjectListItem, ProjectMeta } from '../project/types.js'
+import { ProjectStore } from './project-store.js'
 
-const path = (): string => join(app.getPath('userData'), 'projects.json')
+let store: ProjectStore | null = null
 
-export async function listProjects(): Promise<ProjectSnapshot[]> {
+function projects(): ProjectStore {
+  store ??= new ProjectStore(join(app.getPath('userData'), 'projects'))
+  return store
+}
+
+/** 第一次啟動時把 v0.1／v0.2 的單一 projects.json 搬進新結構。 */
+export async function migrateLegacyProjects(): Promise<number> {
   try {
-    const value: unknown = JSON.parse(await readFile(path(), 'utf8'))
-    if (!Array.isArray(value)) throw new Error('根節點不是陣列')
-    return value as ProjectSnapshot[]
+    return await projects().migrateLegacy(join(app.getPath('userData'), 'projects.json'))
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-      console.warn(`無法讀取進度快照，將使用空清單：${String(error)}`)
-    return []
+    console.warn(`舊存檔匯入失敗，略過：${String(error)}`)
+    return 0
   }
 }
 
-async function store(projects: ProjectSnapshot[]): Promise<ProjectSnapshot[]> {
-  const target = path()
-  const temporary = `${target}.tmp`
-  await writeFile(temporary, JSON.stringify(projects, null, 2), 'utf8')
-  await rename(temporary, target)
-  return projects
+export async function listProjects(): Promise<ProjectListItem[]> {
+  const metas = await projects().list()
+  return Promise.all(
+    metas.map(async (meta) => ({
+      ...meta,
+      thumbnail: await projects().readThumbnail(meta.id),
+    })),
+  )
 }
 
-export async function saveProject(snapshot: ProjectSnapshot): Promise<ProjectSnapshot[]> {
-  const projects = await listProjects()
-  const index = projects.findIndex(({ id }) => id === snapshot.id)
-  if (index < 0) projects.unshift(snapshot)
-  else projects[index] = snapshot
-  return store(projects)
+export async function readProject(id: string): Promise<ProjectBlob | null> {
+  const record = await projects().read(id)
+  return record ? (record.state as ProjectBlob) : null
 }
 
-export async function deleteProject(id: string): Promise<ProjectSnapshot[]> {
-  return store((await listProjects()).filter((snapshot) => snapshot.id !== id))
+export async function createProject(input: {
+  name: string
+  sourcePath: string
+  sourceName: string
+  state: ProjectBlob
+  thumbnailDataUrl?: string
+}): Promise<ProjectMeta> {
+  return projects().create(input)
 }
 
-export async function renameProject(id: string, name: string): Promise<ProjectSnapshot[]> {
-  const projects = await listProjects()
-  const snapshot = projects.find((item) => item.id === id)
-  if (snapshot) {
-    snapshot.name = name.trim() || snapshot.name
-    snapshot.updatedAt = new Date().toISOString()
-  }
-  return store(projects)
+export async function saveProject(
+  id: string,
+  state: ProjectBlob,
+  thumbnailDataUrl?: string,
+): Promise<ProjectMeta> {
+  return projects().save(id, state, thumbnailDataUrl)
+}
+
+export async function autosaveProject(id: string, state: ProjectBlob): Promise<void> {
+  return projects().autosave(id, state)
+}
+
+export async function readProjectAutosave(
+  id: string,
+): Promise<{ state: ProjectBlob; savedAt: string } | null> {
+  const found = await projects().readAutosave(id)
+  return found ? { state: found.state as ProjectBlob, savedAt: found.savedAt } : null
+}
+
+export async function discardProjectAutosave(id: string): Promise<void> {
+  return projects().discardAutosave(id)
+}
+
+export async function renameProject(id: string, name: string): Promise<ProjectMeta[]> {
+  return projects().rename(id, name)
+}
+
+export async function deleteProject(id: string): Promise<ProjectMeta[]> {
+  return projects().remove(id)
+}
+
+export async function duplicateProject(id: string, name: string): Promise<ProjectMeta> {
+  return projects().duplicate(id, name)
 }

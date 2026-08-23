@@ -1066,3 +1066,195 @@ select {
   color: #241d0d;
   border-color: var(--accent);
 }
+
+.pack-note {
+  margin: 2px 0 8px;
+  color: var(--muted);
+}
+.pack-cell.droppable.empty {
+  border-style: dashed;
+}
+.pack-cell .drop-hint {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* —— 專案選擇畫面 —— */
+.start-screen {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 28px 32px;
+  gap: 20px;
+  overflow: hidden;
+}
+.start-screen > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex: none;
+}
+.start-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.start-brand img {
+  width: 52px;
+  height: 52px;
+}
+.start-brand h1 {
+  margin: 0;
+  font-size: 21px;
+}
+.start-brand p {
+  margin: 3px 0 0;
+  color: var(--muted);
+}
+.start-actions {
+  display: flex;
+  gap: 8px;
+}
+.start-actions .primary {
+  background: var(--accent);
+  color: #241d0d;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.start-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-content: start;
+  gap: 12px;
+}
+.start-list .empty-note {
+  grid-column: 1 / -1;
+}
+.start-card {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  grid-template-areas: 'thumb meta' 'thumb actions';
+  gap: 4px 12px;
+  padding: 12px;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  background: var(--panel);
+  cursor: pointer;
+}
+.start-card:hover {
+  border-color: var(--accent);
+}
+.start-thumb {
+  grid-area: thumb;
+  width: 84px;
+  height: 84px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: repeating-linear-gradient(45deg, #26272400 0 8px, #2c2d2a 8px 16px), #202120;
+  display: grid;
+  place-items: center;
+}
+.start-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.start-meta {
+  grid-area: meta;
+  min-width: 0;
+}
+.start-meta b {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 3px;
+  overflow-wrap: anywhere;
+}
+.start-meta small {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.start-autosave {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  color: var(--accent);
+}
+.start-card-actions {
+  grid-area: actions;
+  display: flex;
+  gap: 6px;
+  align-self: end;
+  margin-top: 6px;
+}
+.start-card-actions button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.start-card-actions .danger {
+  border-color: #6d3a31;
+  color: #f3b6ab;
+}
+
+/* —— 編輯器頂端的專案列 —— */
+.project-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--edge);
+}
+.project-identity {
+  min-width: 0;
+}
+.project-name {
+  display: block;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.project-name:hover {
+  color: var(--accent);
+}
+.dirty-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.project-identity small {
+  color: var(--muted);
+}
+.project-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.project-buttons .save-button {
+  background: var(--accent);
+  color: #241d0d;
+  border-color: var(--accent);
+}
+.mode-pack .project-bar {
+  max-width: 1100px;
+  margin: 0 auto 12px;
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  background: var(--panel);
+}

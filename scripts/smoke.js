@@ -11223,8 +11223,8 @@ var require_gifenc = __commonJS({
           }
         }
         const color = hasAlpha ? [r, g, b, a] : [r, g, b];
-        const exists = existsInPalette(palette, color);
-        if (!exists)
+        const exists2 = existsInPalette(palette, color);
+        if (!exists2)
           palette.push(color);
         if ((i = bins[i].fw) == 0)
           break;
@@ -27178,8 +27178,8 @@ var require_additionalInfo = __commonJS({
         const maxChannels = (0, psdReader_1.readInt32)(reader);
         const channels = [];
         for (let i = 0; i < maxChannels + 2; i++) {
-          const exists = (0, psdReader_1.readInt32)(reader);
-          if (exists) {
+          const exists2 = (0, psdReader_1.readInt32)(reader);
+          if (exists2) {
             if ((0, psdReader_1.readUint32)(reader))
               throw new Error("filterEffect: 64 bit length is not supported");
             const channelLength = (0, psdReader_1.readUint32)(reader);
@@ -29264,7 +29264,7 @@ var require_lz4 = __commonJS({
 var import_jszip3 = __toESM(require_lib3(), 1);
 var import_upng_js2 = __toESM(require_UPNG(), 1);
 import assert from "node:assert/strict";
-import { mkdir, readFile as readFile4, rm, writeFile as writeFile4 } from "node:fs/promises";
+import { mkdir as mkdir2, readFile as readFile4, rm as rm2, writeFile as writeFile4 } from "node:fs/promises";
 import { join as join5, resolve } from "node:path";
 import { app as app3, BrowserWindow, nativeImage } from "electron";
 
@@ -29547,7 +29547,7 @@ function encodeGif(frames, width, height, opts) {
 var import_jszip2 = __toESM(require_lib3(), 1);
 var import_upng_js = __toESM(require_UPNG(), 1);
 import { dialog, ipcMain, shell } from "electron";
-import { readFile as readFile3, readdir, stat, writeFile as writeFile3 } from "node:fs/promises";
+import { readFile as readFile3, readdir as readdir2, stat, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname, extname as extname2, join as join4 } from "node:path";
 
 // src/formats/index.ts
@@ -31003,45 +31003,526 @@ async function parseSource(filePath, data) {
 
 // src/main/projects.ts
 import { app } from "electron";
-import { readFile, rename, writeFile } from "node:fs/promises";
 import { join as join2 } from "node:path";
-var path = () => join2(app.getPath("userData"), "projects.json");
-async function listProjects() {
+
+// src/main/project-store.ts
+import { randomBytes, randomUUID } from "node:crypto";
+import { access, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+var ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+var PNG_DATA_URL_PREFIX = "data:image/png;base64,";
+var ProjectStore = class {
+  root;
+  constructor(root) {
+    this.root = path.resolve(root);
+  }
+  /**
+   * 以各專案資料夾裡的 project.json 為準重新掃描，順便把 index.json 修好。
+   * index.json 只是快取，壞掉不該讓整個清單掛掉。
+   */
+  async list() {
+    await this.ensureRoot();
+    await this.warnIfIndexCorrupt();
+    const metas = [];
+    const entries = await readdir(this.root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !ID_PATTERN.test(entry.name)) {
+        continue;
+      }
+      const projectFile = path.join(this.root, entry.name, "project.json");
+      let record;
+      try {
+        record = parseProjectRecord(await readJson(projectFile));
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          continue;
+        }
+        console.warn(`\u5C08\u6848 ${entry.name} \u8B80\u4E0D\u52D5\uFF0C\u7565\u904E\uFF1A${formatError(error)}`);
+        continue;
+      }
+      if (record === null) {
+        console.warn(`\u5C08\u6848 ${entry.name} \u7684 project.json \u683C\u5F0F\u4E0D\u5C0D\uFF0C\u7565\u904E`);
+        continue;
+      }
+      if (record.meta.id !== entry.name || !ID_PATTERN.test(record.meta.id)) {
+        console.warn(`\u5C08\u6848 ${entry.name} \u7684 id \u8207\u8CC7\u6599\u593E\u540D\u7A31\u4E0D\u7B26\uFF0C\u7565\u904E`);
+        continue;
+      }
+      const autosave = await this.readFreshAutosave(record.meta.id, record.meta.updatedAt);
+      metas.push({
+        ...record.meta,
+        hasAutosave: autosave !== null,
+        autosaveAt: autosave?.savedAt ?? null
+      });
+    }
+    metas.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    await this.writeIndex(metas);
+    return metas;
+  }
+  async read(id) {
+    const projectDir = this.projectDir(id);
+    const projectFile = path.join(projectDir, "project.json");
+    let record;
+    try {
+      record = parseProjectRecord(await readJson(projectFile));
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    if (record === null) {
+      throw new Error(`Invalid project file for id ${id}`);
+    }
+    const autosave = await this.readFreshAutosave(id, record.meta.updatedAt);
+    return {
+      ...record,
+      meta: {
+        ...record.meta,
+        hasAutosave: autosave !== null,
+        autosaveAt: autosave?.savedAt ?? null
+      }
+    };
+  }
+  async readThumbnail(id) {
+    const thumbFile = path.join(this.projectDir(id), "thumb.png");
+    try {
+      const buffer = await readFile(thumbFile);
+      return `${PNG_DATA_URL_PREFIX}${buffer.toString("base64")}`;
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+  async create(input) {
+    await this.ensureRoot();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const id = await this.createUniqueId();
+    const meta = {
+      id,
+      name: input.name,
+      createdAt: now,
+      updatedAt: now,
+      sourcePath: input.sourcePath,
+      sourceName: input.sourceName,
+      hasAutosave: false,
+      autosaveAt: null
+    };
+    const projectDir = this.projectDir(id);
+    await mkdir(projectDir, { recursive: true });
+    await writeJsonAtomic(path.join(projectDir, "project.json"), { meta, state: input.state });
+    if (input.thumbnailDataUrl !== void 0) {
+      await writePngDataUrl(path.join(projectDir, "thumb.png"), input.thumbnailDataUrl);
+    }
+    await this.list();
+    return meta;
+  }
+  async save(id, state, thumbnailDataUrl) {
+    const record = await this.requireProject(id);
+    const meta = {
+      ...record.meta,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      hasAutosave: false,
+      autosaveAt: null
+    };
+    const projectDir = this.projectDir(id);
+    await writeJsonAtomic(path.join(projectDir, "project.json"), { meta, state });
+    if (thumbnailDataUrl !== void 0) {
+      await writePngDataUrl(path.join(projectDir, "thumb.png"), thumbnailDataUrl);
+    }
+    await this.discardAutosave(id);
+    await this.list();
+    return meta;
+  }
+  async autosave(id, state) {
+    await this.requireProject(id);
+    const autosave = {
+      state,
+      savedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await writeJsonAtomic(path.join(this.projectDir(id), "autosave.json"), autosave);
+  }
+  async readAutosave(id) {
+    const record = await this.read(id);
+    if (record === null) {
+      return null;
+    }
+    return this.readFreshAutosave(id, record.meta.updatedAt);
+  }
+  async discardAutosave(id) {
+    await rm(path.join(this.projectDir(id), "autosave.json"), { force: true });
+  }
+  async rename(id, name) {
+    const record = await this.requireProject(id);
+    const meta = {
+      ...record.meta,
+      name,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      hasAutosave: record.meta.hasAutosave,
+      autosaveAt: record.meta.autosaveAt
+    };
+    await writeJsonAtomic(path.join(this.projectDir(id), "project.json"), {
+      meta,
+      state: record.state
+    });
+    return this.list();
+  }
+  async remove(id) {
+    await rm(this.projectDir(id), { recursive: true, force: true });
+    return this.list();
+  }
+  async duplicate(id, name) {
+    const record = await this.requireProject(id);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const newId = await this.createUniqueId();
+    const meta = {
+      ...record.meta,
+      id: newId,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      hasAutosave: false,
+      autosaveAt: null
+    };
+    const sourceThumb = path.join(this.projectDir(id), "thumb.png");
+    const targetDir = this.projectDir(newId);
+    await mkdir(targetDir, { recursive: true });
+    await writeJsonAtomic(path.join(targetDir, "project.json"), {
+      meta,
+      state: record.state
+    });
+    try {
+      await copyFile(sourceThumb, path.join(targetDir, "thumb.png"));
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+    await this.list();
+    return meta;
+  }
+  async migrateLegacy(legacyFilePath) {
+    await this.ensureRoot();
+    let parsed;
+    try {
+      parsed = await readJson(legacyFilePath);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return 0;
+      }
+      throw error;
+    }
+    const snapshots = parseLegacySnapshots(parsed);
+    if (snapshots.length === 0) {
+      await this.renameLegacyFile(legacyFilePath);
+      return 0;
+    }
+    let imported = 0;
+    for (const snapshot of snapshots) {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const createdAt = stringOr(snapshot.createdAt, now);
+      const updatedAt = stringOr(snapshot.updatedAt, createdAt);
+      const id = await this.createUniqueId(stringOrNull(snapshot.id));
+      const meta = {
+        id,
+        name: stringOr(snapshot.name, "Untitled Project"),
+        createdAt,
+        updatedAt,
+        sourcePath: stringOr(snapshot.clipPath, stringOr(snapshot.sourcePath, "")),
+        sourceName: stringOr(snapshot.clipName, stringOr(snapshot.sourceName, "")),
+        hasAutosave: false,
+        autosaveAt: null
+      };
+      const projectDir = this.projectDir(id);
+      await mkdir(projectDir, { recursive: true });
+      await writeJsonAtomic(path.join(projectDir, "project.json"), {
+        meta,
+        state: legacyState(snapshot)
+      });
+      if (typeof snapshot.thumbnail === "string" && snapshot.thumbnail.startsWith(PNG_DATA_URL_PREFIX)) {
+        await writePngDataUrl(path.join(projectDir, "thumb.png"), snapshot.thumbnail);
+      }
+      imported += 1;
+    }
+    await this.renameLegacyFile(legacyFilePath);
+    await this.list();
+    return imported;
+  }
+  async requireProject(id) {
+    const record = await this.read(id);
+    if (record === null) {
+      throw new Error(`Project not found: ${id}`);
+    }
+    return record;
+  }
+  projectDir(id) {
+    if (!ID_PATTERN.test(id)) {
+      throw new Error(`Invalid project id: ${id}`);
+    }
+    return path.join(this.root, id);
+  }
+  async ensureRoot() {
+    await mkdir(this.root, { recursive: true });
+  }
+  async createUniqueId(preferredId) {
+    if (preferredId !== void 0 && preferredId !== null && ID_PATTERN.test(preferredId)) {
+      if (!await exists(path.join(this.root, preferredId))) {
+        return preferredId;
+      }
+    }
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const id = randomUUID();
+      if (!await exists(path.join(this.root, id))) {
+        return id;
+      }
+    }
+    throw new Error("Unable to generate a unique project id");
+  }
+  async warnIfIndexCorrupt() {
+    const indexFile = path.join(this.root, "index.json");
+    try {
+      await readJson(indexFile);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        console.warn(`index.json \u58DE\u6389\uFF0C\u6539\u7528\u5404\u5C08\u6848\u8CC7\u6599\u593E\u91CD\u5EFA\uFF1A${formatError(error)}`);
+      }
+    }
+  }
+  async writeIndex(projects2) {
+    const index = {
+      version: 1,
+      projects: projects2
+    };
+    await writeJsonAtomic(path.join(this.root, "index.json"), index);
+  }
+  async readFreshAutosave(id, projectUpdatedAt) {
+    const autosaveFile = path.join(this.projectDir(id), "autosave.json");
+    let autosave;
+    try {
+      autosave = parseAutosaveRecord(await readJson(autosaveFile));
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return null;
+      }
+      console.warn(`Ignoring corrupt autosave for ${id}: ${formatError(error)}`);
+      return null;
+    }
+    if (autosave === null) {
+      console.warn(`Ignoring invalid autosave for ${id}: autosave.json shape is invalid`);
+      return null;
+    }
+    if (Date.parse(autosave.savedAt) <= Date.parse(projectUpdatedAt)) {
+      return null;
+    }
+    return autosave;
+  }
+  async renameLegacyFile(legacyFilePath) {
+    const parsed = path.parse(legacyFilePath);
+    const target = await nextAvailableLegacyPath(parsed.dir, parsed.name, parsed.ext);
+    try {
+      await rename(legacyFilePath, target);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+  }
+};
+async function readJson(filePath) {
+  const text = await readFile(filePath, "utf8");
+  return JSON.parse(text);
+}
+async function writeJsonAtomic(filePath, value) {
+  await atomicWriteFile(filePath, `${JSON.stringify(value, null, 2)}
+`);
+}
+async function writePngDataUrl(filePath, dataUrl) {
+  if (!dataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
+    throw new Error("\u7E2E\u5716\u5FC5\u9808\u662F PNG \u7684 data URL");
+  }
+  const base64 = dataUrl.slice(PNG_DATA_URL_PREFIX.length);
+  await atomicWriteFile(filePath, Buffer.from(base64, "base64"));
+}
+async function atomicWriteFile(filePath, data) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const tempFile = path.join(
+    path.dirname(filePath),
+    `${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`
+  );
   try {
-    const value = JSON.parse(await readFile(path(), "utf8"));
-    if (!Array.isArray(value)) throw new Error("\u6839\u7BC0\u9EDE\u4E0D\u662F\u9663\u5217");
-    return value;
+    await writeFile(tempFile, data);
+    await rename(tempFile, filePath);
   } catch (error) {
-    if (error.code !== "ENOENT")
-      console.warn(`\u7121\u6CD5\u8B80\u53D6\u9032\u5EA6\u5FEB\u7167\uFF0C\u5C07\u4F7F\u7528\u7A7A\u6E05\u55AE\uFF1A${String(error)}`);
-    return [];
+    await rm(tempFile, { force: true }).catch(() => void 0);
+    throw error;
   }
 }
-async function store(projects) {
-  const target = path();
-  const temporary = `${target}.tmp`;
-  await writeFile(temporary, JSON.stringify(projects, null, 2), "utf8");
-  await rename(temporary, target);
-  return projects;
+async function exists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw error;
+  }
 }
-async function saveProject(snapshot) {
-  const projects = await listProjects();
-  const index = projects.findIndex(({ id }) => id === snapshot.id);
-  if (index < 0) projects.unshift(snapshot);
-  else projects[index] = snapshot;
-  return store(projects);
+async function nextAvailableLegacyPath(dir, name, ext) {
+  const first = path.join(dir, `${name}.legacy${ext}`);
+  if (!await exists(first)) {
+    return first;
+  }
+  for (let index = 1; index < 1e3; index += 1) {
+    const candidate = path.join(dir, `${name}.legacy.${index}${ext}`);
+    if (!await exists(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error("Unable to choose a non-overwriting legacy backup path");
 }
-async function deleteProject(id) {
-  return store((await listProjects()).filter((snapshot) => snapshot.id !== id));
+function parseProjectRecord(value) {
+  const object = asRecord(value);
+  if (object === null) {
+    return null;
+  }
+  const meta = parseProjectMeta(object.meta);
+  if (meta === null) {
+    return null;
+  }
+  return {
+    meta,
+    state: object.state
+  };
+}
+function parseProjectMeta(value) {
+  const object = asRecord(value);
+  if (object === null) {
+    return null;
+  }
+  const id = stringOrNull(object.id);
+  const name = stringOrNull(object.name);
+  const createdAt = stringOrNull(object.createdAt);
+  const updatedAt = stringOrNull(object.updatedAt);
+  const sourcePath = stringOrNull(object.sourcePath);
+  const sourceName = stringOrNull(object.sourceName);
+  if (id === null || name === null || createdAt === null || updatedAt === null || sourcePath === null || sourceName === null) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    sourcePath,
+    sourceName,
+    hasAutosave: typeof object.hasAutosave === "boolean" ? object.hasAutosave : false,
+    autosaveAt: typeof object.autosaveAt === "string" ? object.autosaveAt : null
+  };
+}
+function parseAutosaveRecord(value) {
+  const object = asRecord(value);
+  if (object === null || typeof object.savedAt !== "string") {
+    return null;
+  }
+  return {
+    state: object.state,
+    savedAt: object.savedAt
+  };
+}
+function parseLegacySnapshots(value) {
+  if (Array.isArray(value)) {
+    return value.map(asRecord).filter((item) => item !== null);
+  }
+  const object = asRecord(value);
+  if (object !== null && Array.isArray(object.projects)) {
+    return object.projects.map(asRecord).filter((item) => item !== null);
+  }
+  return [];
+}
+function legacyState(snapshot) {
+  const hasState = Object.prototype.hasOwnProperty.call(snapshot, "state");
+  const hasPack = Object.prototype.hasOwnProperty.call(snapshot, "pack");
+  if (hasState && hasPack) {
+    return {
+      state: snapshot.state,
+      pack: snapshot.pack
+    };
+  }
+  if (hasState) {
+    return snapshot.state;
+  }
+  if (hasPack) {
+    return {
+      pack: snapshot.pack
+    };
+  }
+  return {};
+}
+function asRecord(value) {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value;
+}
+function stringOr(value, fallback) {
+  return typeof value === "string" ? value : fallback;
+}
+function stringOrNull(value) {
+  return typeof value === "string" ? value : null;
+}
+function isMissingFileError(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// src/main/projects.ts
+var store = null;
+function projects() {
+  store ??= new ProjectStore(join2(app.getPath("userData"), "projects"));
+  return store;
+}
+async function listProjects() {
+  const metas = await projects().list();
+  return Promise.all(
+    metas.map(async (meta) => ({
+      ...meta,
+      thumbnail: await projects().readThumbnail(meta.id)
+    }))
+  );
+}
+async function readProject(id) {
+  const record = await projects().read(id);
+  return record ? record.state : null;
+}
+async function createProject(input) {
+  return projects().create(input);
+}
+async function saveProject(id, state, thumbnailDataUrl) {
+  return projects().save(id, state, thumbnailDataUrl);
+}
+async function autosaveProject(id, state) {
+  return projects().autosave(id, state);
+}
+async function readProjectAutosave(id) {
+  const found = await projects().readAutosave(id);
+  return found ? { state: found.state, savedAt: found.savedAt } : null;
+}
+async function discardProjectAutosave(id) {
+  return projects().discardAutosave(id);
 }
 async function renameProject(id, name) {
-  const projects = await listProjects();
-  const snapshot = projects.find((item) => item.id === id);
-  if (snapshot) {
-    snapshot.name = name.trim() || snapshot.name;
-    snapshot.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-  }
-  return store(projects);
+  return projects().rename(id, name);
+}
+async function deleteProject(id) {
+  return projects().remove(id);
+}
+async function duplicateProject(id, name) {
+  return projects().duplicate(id, name);
 }
 
 // src/main/giphy.ts
@@ -31249,7 +31730,7 @@ async function importPackFolder(requested) {
   }
   const cells = [];
   const skipped = [];
-  for (const entry of await readdir(folder, { withFileTypes: true })) {
+  for (const entry of await readdir2(folder, { withFileTypes: true })) {
     if (!entry.isFile()) continue;
     const match = /^(?:(\d{1,2})|(main)|(tab))\.png$/i.exec(entry.name);
     const numeric2 = match?.[1] ? Number(match[1]) : null;
@@ -31510,9 +31991,27 @@ function registerIpc(getWindow) {
     return shell.openExternal(parsed.toString());
   });
   ipcMain.handle("project:list", () => listProjects());
-  ipcMain.handle("project:save", (_event, snapshot) => saveProject(snapshot));
+  ipcMain.handle("project:read", (_event, id) => readProject(id));
+  ipcMain.handle(
+    "project:create",
+    (_event, input) => createProject(input)
+  );
+  ipcMain.handle(
+    "project:save",
+    (_event, id, state, thumbnailDataUrl) => saveProject(id, state, thumbnailDataUrl)
+  );
+  ipcMain.handle(
+    "project:autosave",
+    (_event, id, state) => autosaveProject(id, state)
+  );
+  ipcMain.handle("project:readAutosave", (_event, id) => readProjectAutosave(id));
+  ipcMain.handle("project:discardAutosave", (_event, id) => discardProjectAutosave(id));
   ipcMain.handle("project:delete", (_event, id) => deleteProject(id));
   ipcMain.handle("project:rename", (_event, id, name) => renameProject(id, name));
+  ipcMain.handle(
+    "project:duplicate",
+    (_event, id, name) => duplicateProject(id, name)
+  );
   ipcMain.handle(
     "project:importFolder",
     (_event, requested) => importPackFolder(requested)
@@ -31611,6 +32110,18 @@ function registerIpc(getWindow) {
     (_event, folder, payloads) => writeMultiExport(getWindow, folder, payloads)
   );
   ipcMain.handle("export:saveMultiZip", (_event, payloads) => saveMultiZip(getWindow, payloads));
+  ipcMain.handle(
+    "pack:readImage",
+    async (_event, source) => {
+      const bytes = source.filePath ? new Uint8Array(await readFile3(source.filePath)) : new Uint8Array(source.bytes ?? []);
+      const info = pngInfo(bytes);
+      return {
+        pngBase64: Buffer.from(bytes).toString("base64"),
+        byteLength: bytes.length,
+        ...info
+      };
+    }
+  );
   ipcMain.handle("pack:encode", (_event, payload) => {
     const encoded = encodeExport(payload);
     return {
@@ -31635,7 +32146,7 @@ function registerIpc(getWindow) {
     if (!target) return { folder: "", entries: [] };
     if (folder) await setDraftFolder(folder);
     const entries = [];
-    for (const entry of await readdir(target, { withFileTypes: true })) {
+    for (const entry of await readdir2(target, { withFileTypes: true })) {
       if (!entry.isFile() || !isSupported(entry.name)) continue;
       const filePath = join4(target, entry.name);
       const info = await stat(filePath);
@@ -31686,8 +32197,8 @@ function gifFrameCount(bytes) {
   return frames;
 }
 async function run() {
-  await rm(outputDir, { recursive: true, force: true });
-  await mkdir(outputDir, { recursive: true });
+  await rm2(outputDir, { recursive: true, force: true });
+  await mkdir2(outputDir, { recursive: true });
   const invalidKey = await testGiphyKey("fake-key", async () => new Response("{}", { status: 401 }));
   assert.deepEqual(invalidKey, { ok: false, message: "\u91D1\u9470\u7121\u6548" });
   registerIpc(() => window2);
@@ -31701,6 +32212,9 @@ async function run() {
       nodeIntegration: false,
       sandbox: false
     }
+  });
+  window2.webContents.on("console-message", (_event, level, message) => {
+    if (level >= 2) console.error(`[renderer] ${message}`);
   });
   await window2.loadFile(join5(projectRoot, "out", "renderer", "index.html"), {
     query: { smoke: "1" }
@@ -31805,42 +32319,80 @@ async function run() {
   assert.ok(nonSquareMemory.plurkZoom > 1);
   assert.equal(nonSquareMemory.stickerZoom, 1);
   const saveProgress = await window2.webContents.executeJavaScript(`(async () => {
-    const store = window.__smoke.store
-    const before = (await window.api.listProjects()).length
-    document.querySelector('.project-heading button').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    const input = document.querySelector('.text-prompt input')
-    if (!input) return { error: '\u6C92\u6709\u8DF3\u51FA\u8F38\u5165\u540D\u7A31\u7684\u5C0D\u8A71\u6846\uFF08Electron \u4E0D\u652F\u63F4 window.prompt\uFF09' }
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-    setter.call(input, 'smoke-progress')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    document.querySelector('.text-prompt .prompt-confirm').click()
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const saved = await window.api.listProjects()
+    const smoke = window.__smoke, store = smoke.store
+    const project = store.getState().project
+    if (!project) return { error: '\u7DE8\u8F2F\u5668\u6C92\u6709\u7D81\u5B9A\u5C08\u6848' }
+    store.getState().set({ fps: 17 })
+    const dirtyAfterEdit = store.getState().dirty
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const saved = await window.api.readProject(project.id)
+    const list = await window.api.listProjects()
     return {
-      before,
-      after: saved.length,
-      named: saved.some((item) => item.name === 'smoke-progress'),
-      hasTracks: Boolean(saved.find((item) => item.name === 'smoke-progress')?.state?.tracks?.length),
-      dirty: store.getState().dirty,
+      dirtyAfterEdit,
+      dirtyAfterSave: store.getState().dirty,
+      savedFps: saved?.state?.fps,
+      hasTracks: Boolean(saved?.state?.tracks?.length),
+      listed: list.some((item) => item.id === project.id),
+      thumbnail: Boolean(list.find((item) => item.id === project.id)?.thumbnail),
       toast: document.querySelector('.toast-success p')?.textContent ?? '',
     }
   })()`);
   assert.equal(saveProgress.error, void 0, saveProgress.error);
-  assert.equal(saveProgress.after, saveProgress.before + 1, "\u5132\u5B58\u9032\u5EA6\u6C92\u6709\u771F\u7684\u5BEB\u9032\u53BB");
-  assert.ok(saveProgress.named, "\u5B58\u4E0B\u4F86\u7684\u9032\u5EA6\u540D\u7A31\u4E0D\u5C0D");
-  assert.ok(saveProgress.hasTracks, "\u5B58\u4E0B\u4F86\u7684\u9032\u5EA6\u6C92\u6709\u5E36\u5230\u5716\u5C64\u8ECC\u9053");
-  assert.equal(saveProgress.dirty, false, "\u5B58\u6A94\u5F8C\u4E0D\u61C9\u518D\u88AB\u8996\u70BA\u6709\u672A\u5B58\u6A94\u8B8A\u66F4");
-  assert.match(saveProgress.toast, /已儲存進度/);
-  await window2.webContents.executeJavaScript(
-    `window.api.listProjects().then((list) => Promise.all(list.filter((item) => item.name === 'smoke-progress').map((item) => window.api.deleteProject(item.id))))`
-  );
+  assert.equal(saveProgress.dirtyAfterEdit, true, "\u6539\u4E86 FPS \u4E4B\u5F8C\u61C9\u8A72\u8981\u88AB\u8996\u70BA\u6709\u672A\u5B58\u6A94\u8B8A\u66F4");
+  assert.equal(saveProgress.dirtyAfterSave, false, "\u5B58\u6A94\u5F8C\u4E0D\u61C9\u518D\u88AB\u8996\u70BA\u6709\u672A\u5B58\u6A94\u8B8A\u66F4");
+  assert.equal(saveProgress.savedFps, 17, "\u5B58\u9032\u5C08\u6848\u7684\u5167\u5BB9\u4E0D\u662F\u7576\u4E0B\u7684\u72C0\u614B");
+  assert.ok(saveProgress.hasTracks, "\u5B58\u4E0B\u4F86\u7684\u5C08\u6848\u6C92\u6709\u5E36\u5230\u5716\u5C64\u8ECC\u9053");
+  assert.ok(saveProgress.listed, "\u5C08\u6848\u6C92\u6709\u51FA\u73FE\u5728\u6E05\u55AE\u88E1");
+  assert.ok(saveProgress.thumbnail, "\u5C08\u6848\u6C92\u6709\u5B58\u5230\u7E2E\u5716");
+  assert.match(saveProgress.toast, /已儲存/);
+  const autosaveFlow = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
+    store.getState().set({ fps: 23 })
+    await window.api.autosaveProject(id, smoke.captureBlob())
+    const pending = await window.api.readProjectAutosave(id)
+    const stillSaved = await window.api.readProject(id)
+    const listedDuring = (await window.api.listProjects()).find((item) => item.id === id)
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    return {
+      pendingFps: pending?.state?.state?.fps,
+      untouchedFps: stillSaved?.state?.fps,
+      flagged: listedDuring?.hasAutosave,
+      clearedAfterSave: await window.api.readProjectAutosave(id),
+      savedFps: (await window.api.readProject(id))?.state?.fps,
+    }
+  })()`);
+  assert.equal(autosaveFlow.pendingFps, 23, "\u81EA\u52D5\u5B58\u6A94\u6C92\u6709\u5B58\u5230\u7576\u4E0B\u72C0\u614B");
+  assert.equal(autosaveFlow.untouchedFps, 17, "\u81EA\u52D5\u5B58\u6A94\u4E0D\u53EF\u4EE5\u52D5\u5230\u6B63\u5F0F\u5B58\u6A94");
+  assert.equal(autosaveFlow.flagged, true, "\u5C08\u6848\u6E05\u55AE\u6C92\u6709\u6A19\u793A\u51FA\u6709\u8F03\u65B0\u7684\u81EA\u52D5\u5B58\u6A94");
+  assert.equal(autosaveFlow.clearedAfterSave, null, "\u6B63\u5F0F\u5B58\u6A94\u5F8C\u61C9\u8A72\u6E05\u6389\u81EA\u52D5\u5B58\u6A94");
+  assert.equal(autosaveFlow.savedFps, 23, "\u6B63\u5F0F\u5B58\u6A94\u6C92\u6709\u5BEB\u5165\u6700\u65B0\u72C0\u614B");
+  const leaveGuard = await window2.webContents.executeJavaScript(`(async () => {
+    const store = window.__smoke.store
+    store.getState().set({ fps: 11 })
+    document.querySelector('.project-bar .project-buttons button:last-child').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const asked = Boolean(document.querySelector('.text-prompt'))
+    document.querySelector('.text-prompt footer button')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const screenAfterCancel = store.getState().screen
+    store.getState().set({ fps: 17, dirty: false })
+    return { asked, screenAfterCancel }
+  })()`);
+  assert.equal(leaveGuard.asked, true, "\u6709\u672A\u5B58\u6A94\u8B8A\u66F4\u6642\u96E2\u958B\u7DE8\u8F2F\u5668\u5FC5\u9808\u5148\u554F");
+  assert.equal(leaveGuard.screenAfterCancel, "editor", "\u6309\u53D6\u6D88\u4E0D\u8A72\u96E2\u958B\u7DE8\u8F2F\u5668");
   const badPath = join5(outputDir, "broken.clip");
   await writeFile4(badPath, (await readFile4(samplePath)).subarray(0, 5e3));
   const badClip = await window2.webContents.executeJavaScript(`(async () => {
     const before = window.__smoke.store.getState().doc.filePath
     window.__smoke.store.getState().set({ dirty: false })
-    await window.__smoke.openClipUi(${JSON.stringify(badPath)})
+    // \u63DB\u4F86\u6E90\u6A94\u6703\u5148\u8DF3\u81EA\u88FD\u78BA\u8A8D\u6846\uFF0C\u6E2C\u8A66\u8981\u81EA\u5DF1\u6309\u4E0B\u53BB\u3002
+    const pending = window.__smoke.openClipUi(${JSON.stringify(badPath)})
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    document.querySelector('.text-prompt .prompt-confirm')?.click()
+    await pending
     await window.__smoke.waitIdle()
     return { before, after: window.__smoke.store.getState().doc.filePath, error: document.querySelector('.toast-error p')?.textContent ?? '', root: Boolean(document.querySelector('#root .app')) }
   })()`);
@@ -32002,7 +32554,7 @@ async function run() {
   assert.ok(plurkGif.length < 256 * 1024);
   await writeFile4(join5(outputDir, "ui-plurk.png"), (await window2.webContents.capturePage()).toPNG());
   const twitchDir = join5(outputDir, "twitch");
-  await mkdir(twitchDir, { recursive: true });
+  await mkdir2(twitchDir, { recursive: true });
   const twitch = await window2.webContents.executeJavaScript(`(async () => {
     const target = document.querySelector('.line-targets'); target.value = 'twitchEmoteAnimated'; target.dispatchEvent(new Event('change', { bubbles: true }))
     await window.__smoke.waitIdle(); const state = window.__smoke.store.getState()
@@ -32242,29 +32794,22 @@ async function run() {
     (await window2.webContents.capturePage()).toPNG()
   );
   const snapshotResult = await window2.webContents.executeJavaScript(`(async () => {
-    for (const item of await window.api.listProjects()) await window.api.deleteProject(item.id)
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
     const target = document.querySelector('.line-targets'); target.value = 'youtubeEmoji'; target.dispatchEvent(new Event('change', { bubbles: true }))
-    await window.__smoke.waitIdle()
-    window.__smoke.store.getState().set({ staticFrame: 2, gifColors: 64 })
-    window.confirm = () => true
-    document.querySelector('.project-heading button').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    const input = document.querySelector('.text-prompt input')
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-    setter.call(input, 'Smoke \u5FEB\u7167')
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    document.querySelector('.text-prompt .prompt-confirm').click()
-    await new Promise((resolve) => setTimeout(resolve, 200))
-    const saved = await window.api.listProjects()
-    window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
-    document.querySelector('.project-row').click()
-    await new Promise((resolve) => requestAnimationFrame(resolve))
-    document.querySelector('.text-prompt .prompt-confirm')?.click()
-    await new Promise((resolve) => setTimeout(resolve, 400)); await window.__smoke.waitIdle()
-    const restored = window.__smoke.store.getState()
-    return { count: saved.length, staticFrame: restored.staticFrame, gifColors: restored.gifColors }
+    await smoke.waitIdle()
+    store.getState().set({ staticFrame: 2, gifColors: 64 })
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // \u4E82\u6539\u4E00\u901A\u4E4B\u5F8C\uFF0C\u628A\u5B58\u6A94\u8B80\u56DE\u4F86\u5FC5\u9808\u9084\u539F\u6210\u5B58\u6A94\u7576\u4E0B\u7684\u6A23\u5B50\u3002
+    store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
+    const blob = await window.api.readProject(id)
+    await smoke.applyBlob(blob)
+    await smoke.waitIdle()
+    const restored = store.getState()
+    return { staticFrame: restored.staticFrame, gifColors: restored.gifColors, dirty: restored.dirty }
   })()`);
-  assert.deepEqual(snapshotResult, { count: 1, staticFrame: 2, gifColors: 64 });
+  assert.deepEqual(snapshotResult, { staticFrame: 2, gifColors: 64, dirty: false });
   const extremes = await window2.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
     const results = []
@@ -32283,9 +32828,9 @@ async function run() {
     assert.equal(item.finite, true, "\u6975\u7AEF\u503C\u4E0B\u4E0D\u53EF\u51FA\u73FE NaN \u6216 Infinity");
   }
   const packSource = join5(outputDir, "pack-source");
-  await mkdir(packSource, { recursive: true });
+  await mkdir2(packSource, { recursive: true });
   const emptyPackSource = join5(outputDir, "pack-empty");
-  await mkdir(emptyPackSource, { recursive: true });
+  await mkdir2(emptyPackSource, { recursive: true });
   const emptyImport = await window2.webContents.executeJavaScript(`(async () => {
     const result = await window.api.importPackFolder(${JSON.stringify(emptyPackSource)})
     window.__smoke.store.getState().set({ mode: 'pack', packCells: result.cells }); window.__smoke.store.getState().toast('info', window.__smoke.packImportMessage(result))
@@ -32441,6 +32986,69 @@ async function run() {
   assert.equal(packRoundTrip.pointerEvents, "auto", "\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u6536\u4E0D\u5230\u6ED1\u9F20\u4E8B\u4EF6");
   assert.equal(packRoundTrip.covered, null, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u88AB ${packRoundTrip.covered} \u84CB\u4F4F`);
   assert.ok(packRoundTrip.width > 100, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u53EA\u6709 ${packRoundTrip.width}px \u5BEC`);
+  const startScreen = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    const id = store.getState().project.id
+    const projectName = store.getState().project.name
+    store.getState().set({ mode: 'animation', fps: 19 })
+    document.querySelector('.project-bar .save-button').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // \u5DF2\u5B58\u6A94\u5C31\u4E0D\u8A72\u518D\u6514\u4EBA\u3002
+    document.querySelector('.project-bar .project-buttons button:last-child').click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const blockedByDialog = Boolean(document.querySelector('.text-prompt'))
+    const onStart = Boolean(document.querySelector('.start-screen'))
+    const projectCleared = store.getState().project === null
+    const cardCount = document.querySelectorAll('.start-card').length
+    const named = [...document.querySelectorAll('.start-card .start-meta b')].map((n) => n.textContent)
+    const thumbs = document.querySelectorAll('.start-card .start-thumb img').length
+    // \u5F9E\u5217\u8868\u9EDE\u56DE\u53BB\uFF0C\u72C0\u614B\u8981\u8DDF\u5B58\u6A94\u7576\u4E0B\u4E00\u6A23\u3002
+    const cards = [...document.querySelectorAll('.start-card')]
+    cards[named.indexOf(projectName)]?.click()
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    await smoke.waitIdle()
+    return {
+      blockedByDialog,
+      onStart,
+      cards: cardCount,
+      thumbs,
+      backInEditor: Boolean(document.querySelector('.app .project-bar')),
+      fps: store.getState().fps,
+      dirty: store.getState().dirty,
+      clearedOnLeave: projectCleared,
+      sameProject: store.getState().project?.id === id,
+    }
+  })()`);
+  assert.equal(startScreen.blockedByDialog, false, "\u5DF2\u5B58\u6A94\u9084\u88AB\u6514\u4E0B\u4F86\u554F\u8981\u4E0D\u8981\u5B58");
+  assert.equal(startScreen.onStart, true, "\u96E2\u958B\u7DE8\u8F2F\u5668\u5F8C\u6C92\u6709\u56DE\u5230\u5C08\u6848\u9078\u64C7\u756B\u9762");
+  assert.ok(startScreen.cards >= 1, "\u5C08\u6848\u9078\u64C7\u756B\u9762\u6C92\u6709\u5217\u51FA\u4EFB\u4F55\u5C08\u6848");
+  assert.ok(startScreen.thumbs >= 1, "\u5C08\u6848\u5361\u7247\u6C92\u6709\u7E2E\u5716");
+  assert.equal(startScreen.backInEditor, true, "\u9EDE\u5C08\u6848\u5361\u7247\u6C92\u6709\u9032\u5230\u7DE8\u8F2F\u5668");
+  assert.equal(startScreen.clearedOnLeave, true, "\u56DE\u5230\u5C08\u6848\u5217\u8868\u6642\u61C9\u8A72\u653E\u6389\u76EE\u524D\u5C08\u6848");
+  assert.equal(startScreen.sameProject, true, "\u9EDE\u56DE\u4F86\u7684\u4E0D\u662F\u540C\u4E00\u500B\u5C08\u6848");
+  assert.equal(startScreen.fps, 19, "\u5F9E\u5C08\u6848\u5217\u8868\u958B\u56DE\u4F86\u7684\u72C0\u614B\u4E0D\u662F\u5B58\u6A94\u7576\u4E0B\u7684\u5167\u5BB9");
+  assert.equal(startScreen.dirty, false, "\u525B\u958B\u555F\u7684\u5C08\u6848\u4E0D\u8A72\u662F\u672A\u5B58\u6A94\u72C0\u614B");
+  const startVisible = await window2.webContents.executeJavaScript(`(async () => {
+    const store = window.__smoke.store
+    store.getState().set({ screen: 'start', toasts: [] })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    // \u6574\u68F5\u6A39\u63DB\u6389\u4E4B\u5F8C\u756B\u9762\u8981\u771F\u7684\u91CD\u7E6A\u904E\uFF0C\u4E0D\u7136 capturePage \u6703\u62CD\u5230\u4E0A\u4E00\u5F35\u3002
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    return Boolean(document.querySelector('.start-screen .start-card'))
+  })()`);
+  assert.equal(startVisible, true, "\u5207\u5230\u5C08\u6848\u5217\u8868\u5F8C\u756B\u9762\u4E0A\u6C92\u6709\u5C08\u6848\u5361\u7247");
+  await new Promise((resolve2) => setTimeout(resolve2, 600));
+  await writeFile4(join5(outputDir, "ui-start.png"), (await window2.webContents.capturePage()).toPNG());
+  await window2.webContents.executeJavaScript(
+    `window.__smoke.store.getState().set({ screen: 'editor' })`
+  );
+  const leftovers = await window2.webContents.executeJavaScript(`(async () => {
+    const list = await window.api.listProjects()
+    const mine = list.filter((item) => /^smoke-/.test(item.name) || item.name === 'Smoke \u5FEB\u7167')
+    for (const item of mine) await window.api.deleteProject(item.id)
+    return { removed: mine.length, remaining: (await window.api.listProjects()).length }
+  })()`);
+  assert.equal(leftovers.remaining, 0, `\u7159\u9727\u6E2C\u8A66\u7559\u4E0B\u4E86 ${leftovers.remaining} \u500B\u5C08\u6848\u6C92\u6E05\u6389`);
   console.table({
     cels: snapshot.celNames.join(", "),
     dropCels: dropped.celNames.join(", "),
