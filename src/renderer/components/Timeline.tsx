@@ -3,6 +3,8 @@ import { bitmapKey } from '../compose.js'
 import { askConfirm } from '../prompt.js'
 import { useStore, type Slot, type Track } from '../state/store.js'
 
+const emptySlot = (): Slot => ({ sourceId: null, layerId: null })
+
 function SlotThumb({ bitmap }: { bitmap: ImageBitmap }): React.JSX.Element {
   return (
     <canvas
@@ -54,10 +56,10 @@ export function Timeline(): React.JSX.Element {
     set({
       tracks: tracks.map((t) => {
         const kept = t.slots.filter((_, i) => !remove.includes(i))
-        const next = kept.length ? kept : [{ layerId: null }]
+        const next = kept.length ? kept : [emptySlot()]
         if (!insert) return { ...t, slots: next }
         const copy = next.slice()
-        copy.splice(at, 0, ...Array.from({ length: insert }, () => ({ layerId: null })))
+        copy.splice(at, 0, ...Array.from({ length: insert }, emptySlot))
         return { ...t, slots: copy }
       }),
       selection: [],
@@ -229,10 +231,12 @@ export function Timeline(): React.JSX.Element {
         >
           {item.slots.map((slot, index) => {
             const resolved = state.resolveSlot(index, trackIndex)
-            const bitmap =
-              resolved === null
-                ? undefined
-                : state.bitmaps.get(bitmapKey(resolved, state.visibility))
+            const bitmap = resolved
+              ? state.bitmaps.get(bitmapKey(resolved.sourceId, resolved.layerId, state.visibility))
+              : undefined
+            const resolvedSource = resolved ? state.sourceOf(resolved.sourceId) : undefined
+            const showSource =
+              resolved !== null && resolvedSource && resolved.sourceId !== state.activeSourceId
             const selected = isActive && selection.includes(index)
             return (
               <div className="slot-wrap" key={index}>
@@ -253,6 +257,7 @@ export function Timeline(): React.JSX.Element {
                   onDragStart={(event) => {
                     event.dataTransfer.setData('application/x-slot-index', String(index))
                     event.dataTransfer.setData('application/x-layer-id', String(slot.layerId))
+                    event.dataTransfer.setData('application/x-source-id', slot.sourceId ?? '')
                     event.dataTransfer.setData(
                       'application/x-selection',
                       selected ? selection.join(',') : '',
@@ -265,6 +270,7 @@ export function Timeline(): React.JSX.Element {
                     const sourceText = event.dataTransfer.getData('application/x-slot-index')
                     const source = Number(sourceText)
                     const layer = Number(event.dataTransfer.getData('application/x-layer-id'))
+                    const sourceId = event.dataTransfer.getData('application/x-source-id')
                     if (group) moveSelection(index, event.altKey)
                     else if (sourceText && !Number.isNaN(source)) {
                       const next = item.slots.slice()
@@ -276,10 +282,10 @@ export function Timeline(): React.JSX.Element {
                           i === trackIndex ? { ...t, slots: next } : t,
                         ),
                       })
-                    } else if (layer) {
+                    } else if (Number.isFinite(layer) && sourceId) {
                       const targets = selected && selection.length ? selection : [index]
                       const next = item.slots.map((current, i) =>
-                        targets.includes(i) ? { layerId: layer } : current,
+                        targets.includes(i) ? { sourceId, layerId: layer } : current,
                       )
                       state.commit()
                       set({
@@ -296,9 +302,10 @@ export function Timeline(): React.JSX.Element {
                     {resolved === null
                       ? '空白'
                       : slot.layerId === null
-                        ? `延續 #${resolved}`
-                        : `#${resolved}`}
+                        ? `延續 #${resolved.layerId}`
+                        : `#${resolved.layerId}`}
                   </b>
+                  {showSource && <small className="slot-source">{resolvedSource.name}</small>}
                 </button>
               </div>
             )
@@ -413,9 +420,7 @@ export function Timeline(): React.JSX.Element {
                 <button
                   onClick={() => {
                     patchActive(
-                      track.slots.map((slot, i) =>
-                        targets.includes(i) ? { layerId: null } : slot,
-                      ),
+                      track.slots.map((slot, i) => (targets.includes(i) ? emptySlot() : slot)),
                     )
                     setMenu(null)
                   }}
@@ -426,7 +431,7 @@ export function Timeline(): React.JSX.Element {
                   onClick={() => {
                     patchActive(
                       track.slots.map((slot, i) =>
-                        targets.includes(i) ? { layerId: state.resolveSlot(i) } : slot,
+                        targets.includes(i) ? (state.resolveSlot(i) ?? emptySlot()) : slot,
                       ),
                     )
                     setMenu(null)

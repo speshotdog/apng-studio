@@ -1,15 +1,20 @@
 import { create } from 'zustand'
 import type { ClipSummary, LayerNode } from '../../preload/api.js'
 import type { ExportTarget } from '../../codec/line.js'
-import type { PackImportCell, ProjectMeta } from '../../project/types.js'
+import type { PackImportCell, ProjectMeta, SourceAsset } from '../../project/types.js'
+
 export type ScaleMode = 'smooth' | 'pixel'
+
 export interface Slot {
+  sourceId: string | null
   layerId: number | null
 }
-/**
- * 一條軌道 = 一個圖層。陣列順序照 Photoshop 的習慣：tracks[0] 在最上面（最後畫），
- * 合成時從最後一條往前畫。每條軌道有自己的影格內容與畫面調整。
- */
+
+export interface ResolvedSlot {
+  sourceId: string
+  layerId: number
+}
+
 export interface Track {
   id: string
   name: string
@@ -20,25 +25,26 @@ export interface Track {
   offsetY: number
   slots: Slot[]
 }
+
 export type ToastLevel = 'success' | 'error' | 'info'
+
 export interface Toast {
   id: number
   level: ToastLevel
   text: string
 }
+
 export type TargetSettings = Pick<
   State,
   'format' | 'exportWidth' | 'exportHeight' | 'lockAspect' | 'fps' | 'playCount' | 'scaleMode'
 > & {
   staticFrame: number
   gifColors: number
-  /** 切換輸出目標時記住的畫面調整，套用在當時作用中的軌道上。 */
   zoom: number
   offsetX: number
   offsetY: number
 }
 
-/** 會被 undo／重做與「未存檔」判斷追蹤的編輯內容。 */
 export interface EditSnapshot {
   tracks: Track[]
   activeTrack: number
@@ -47,21 +53,21 @@ export interface EditSnapshot {
   format: 'apng' | 'gif' | 'png'
   exportWidth: number
   exportHeight: number
-  visibility: Array<[number, boolean]>
+  visibility: Array<[string, boolean]>
   trimmed: Record<string, Slot[]>
 }
 
 export interface State {
-  /** 啟動先停在專案選擇畫面，選定或建立專案後才進編輯器。 */
   screen: 'start' | 'editor'
-  /** 目前開著的專案；編輯器裡任何存檔都是存回這一份，不會再問要存到哪。 */
   project: ProjectMeta | null
+  sources: SourceAsset[]
+  activeSourceId: string | null
+  docs: Record<string, ClipSummary>
   doc: ClipSummary | null
   bitmaps: Map<string, ImageBitmap>
-  visibility: Map<number, boolean>
+  visibility: Map<string, boolean>
   tracks: Track[]
   activeTrack: number
-  /** 在目前軌道上被選取的影格索引，用於批次拖曳。 */
   selection: number[]
   selectedSlot: number
   fps: number
@@ -85,7 +91,6 @@ export interface State {
   packCount: number
   packCells: PackImportCell[]
   toasts: Toast[]
-  /** 減少格數時暫存被切掉的尾巴，重新加回來時不用重拉。 */
   trimmed: Record<string, Slot[]>
   past: EditSnapshot[]
   future: EditSnapshot[]
@@ -94,10 +99,21 @@ export interface State {
   toast: (level: ToastLevel, text: string) => void
   dismissToast: (id: number) => void
   open: (doc: ClipSummary) => void
+  loadSources: (
+    sources: SourceAsset[],
+    docs: Record<string, ClipSummary>,
+    activeSourceId: string | null,
+  ) => void
+  addSource: (asset: SourceAsset, summary: ClipSummary) => void
+  setActiveSource: (sourceId: string) => void
+  removeSource: (sourceId: string) => void
+  sourceOf: (sourceId: string | null) => SourceAsset | undefined
+  /** 來源檔被搬走時換一個路徑，但保留 id，所有影格的引用都不用動。 */
+  relinkSource: (sourceId: string, path: string, name: string, summary: ClipSummary) => void
   reset: () => void
   setBitmap: (key: string, bitmap: ImageBitmap) => void
   setSlot: (index: number, layerId: number | null) => void
-  resolveSlot: (index: number, trackIndex?: number) => number | null
+  resolveSlot: (index: number, trackIndex?: number) => ResolvedSlot | null
   frameCount: () => number
   resizeFrames: (count: number) => void
   setTrack: (index: number, patch: Partial<Track>) => void
@@ -111,9 +127,25 @@ export interface State {
   importCspTimeline: (timelineIndex: number) => void
 }
 
-function collect(node: LayerNode, map: Map<number, boolean>): void {
-  map.set(node.id, node.visible)
-  node.children.forEach((child) => collect(child, map))
+function visibilityId(sourceId: string, layerId: number): string {
+  return `${sourceId}:${layerId}`
+}
+
+function collect(sourceId: string, node: LayerNode, map: Map<string, boolean>): void {
+  map.set(visibilityId(sourceId, node.id), node.visible)
+  node.children.forEach((child) => collect(sourceId, child, map))
+}
+
+function assetFromSummary(doc: ClipSummary): SourceAsset {
+  return {
+    id: crypto.randomUUID(),
+    path: doc.filePath,
+    name: doc.filePath.split(/[\\/]/).at(-1) ?? doc.filePath,
+  }
+}
+
+function emptySlot(): Slot {
+  return { sourceId: null, layerId: null }
 }
 
 export function newTrack(name: string, frames: number): Track {
@@ -125,7 +157,7 @@ export function newTrack(name: string, frames: number): Track {
     zoom: 1,
     offsetX: 0,
     offsetY: 0,
-    slots: Array.from({ length: frames }, () => ({ layerId: null })),
+    slots: Array.from({ length: frames }, emptySlot),
   }
 }
 
@@ -139,16 +171,18 @@ function snapshot(state: State): EditSnapshot {
     exportWidth: state.exportWidth,
     exportHeight: state.exportHeight,
     visibility: [...state.visibility],
-    trimmed: state.trimmed,
+    trimmed: Object.fromEntries(
+      Object.entries(state.trimmed).map(([id, slots]) => [id, slots.map((slot) => ({ ...slot }))]),
+    ),
   }
 }
 
 const HISTORY_LIMIT = 60
 let toastId = 0
 
-/** 改到這些欄位就算「有未存檔的變更」，換檔／開新專案前要先提醒。 */
 const DIRTY_KEYS: ReadonlyArray<keyof State> = [
   'tracks',
+  'sources',
   'fps',
   'playCount',
   'format',
@@ -164,9 +198,12 @@ const DIRTY_KEYS: ReadonlyArray<keyof State> = [
 ]
 
 const makeInitial = () => ({
+  sources: [] as SourceAsset[],
+  activeSourceId: null as string | null,
+  docs: {} as Record<string, ClipSummary>,
   doc: null as ClipSummary | null,
   bitmaps: new Map<string, ImageBitmap>(),
-  visibility: new Map<number, boolean>(),
+  visibility: new Map<string, boolean>(),
   tracks: [newTrack('圖層 1', 8)],
   activeTrack: 0,
   selection: [] as number[],
@@ -213,19 +250,120 @@ export const useStore = create<State>((set, get) => ({
     set((state) => ({ toasts: [...state.toasts, { id: ++toastId, level, text }] })),
   dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
   open: (doc) => {
-    const visibility = new Map<number, boolean>()
-    collect(doc.tree, visibility)
+    const asset = assetFromSummary(doc)
+    const visibility = new Map<string, boolean>()
+    collect(asset.id, doc.tree, visibility)
     set({
       ...makeInitial(),
       toasts: get().toasts,
       screen: get().screen,
       project: get().project,
+      sources: [asset],
+      activeSourceId: asset.id,
+      docs: { [asset.id]: doc },
       doc,
       visibility,
       tracks: [newTrack('圖層 1', 8)],
       fps: doc.timeline?.frameRate ?? 12,
       exportWidth: doc.canvas.width,
       exportHeight: doc.canvas.height,
+    })
+  },
+  loadSources: (sources, docs, activeSourceId) => {
+    const visibility = new Map<string, boolean>()
+    sources.forEach((source) => {
+      const summary = docs[source.id]
+      if (summary) collect(source.id, summary.tree, visibility)
+    })
+    const active =
+      activeSourceId && docs[activeSourceId] ? activeSourceId : (sources[0]?.id ?? null)
+    const doc = active ? (docs[active] ?? null) : null
+    set({
+      ...makeInitial(),
+      toasts: get().toasts,
+      screen: get().screen,
+      project: get().project,
+      sources,
+      activeSourceId: active,
+      docs,
+      doc,
+      visibility,
+      fps: doc?.timeline?.frameRate ?? 12,
+      exportWidth: doc?.canvas.width ?? 270,
+      exportHeight: doc?.canvas.height ?? 270,
+    })
+  },
+  addSource: (asset, summary) => {
+    const state = get()
+    const visibility = new Map(state.visibility)
+    collect(asset.id, summary.tree, visibility)
+    set({
+      sources: [...state.sources.filter((source) => source.id !== asset.id), asset],
+      activeSourceId: asset.id,
+      docs: { ...state.docs, [asset.id]: summary },
+      doc: summary,
+      visibility,
+      exportWidth: state.doc ? state.exportWidth : summary.canvas.width,
+      exportHeight: state.doc ? state.exportHeight : summary.canvas.height,
+      dirty: true,
+    })
+  },
+  setActiveSource: (sourceId) => {
+    const doc = get().docs[sourceId]
+    if (!doc) return
+    set({ activeSourceId: sourceId, doc })
+  },
+  removeSource: (sourceId) => {
+    const state = get()
+    if (!state.sources.some((source) => source.id === sourceId)) return
+    const sources = state.sources.filter((source) => source.id !== sourceId)
+    const docs = Object.fromEntries(
+      Object.entries(state.docs).filter(([id]) => id !== sourceId),
+    ) as Record<string, ClipSummary>
+    const activeSourceId =
+      state.activeSourceId === sourceId ? (sources[0]?.id ?? null) : state.activeSourceId
+    const visibility = new Map(
+      [...state.visibility].filter(([key]) => !key.startsWith(`${sourceId}:`)),
+    )
+    const bitmaps = new Map([...state.bitmaps].filter(([key]) => !key.startsWith(`${sourceId}:`)))
+    const clearSlot = (slot: Slot): Slot => (slot.sourceId === sourceId ? emptySlot() : { ...slot })
+    set({
+      sources,
+      activeSourceId,
+      docs,
+      doc: activeSourceId ? (docs[activeSourceId] ?? null) : null,
+      visibility,
+      bitmaps,
+      tracks: state.tracks.map((track) => ({
+        ...track,
+        slots: track.slots.map(clearSlot),
+      })),
+      trimmed: Object.fromEntries(
+        Object.entries(state.trimmed).map(([id, slots]) => [id, slots.map(clearSlot)]),
+      ),
+      selection: [],
+      playing: false,
+      dirty: true,
+    })
+  },
+  sourceOf: (sourceId) => get().sources.find((source) => source.id === sourceId),
+  relinkSource: (sourceId, path, name, summary) => {
+    const state = get()
+    if (!state.sources.some((source) => source.id === sourceId)) return
+    const visibility = new Map(
+      [...state.visibility].filter(([key]) => !key.startsWith(`${sourceId}:`)),
+    )
+    collect(sourceId, summary.tree, visibility)
+    set({
+      sources: state.sources.map((source) =>
+        source.id === sourceId ? { ...source, path, name } : source,
+      ),
+      docs: { ...state.docs, [sourceId]: summary },
+      doc: state.activeSourceId === sourceId ? summary : state.doc,
+      visibility,
+      // 換了檔案，舊的圖層縮圖不能再用。
+      bitmaps: new Map([...state.bitmaps].filter(([key]) => !key.startsWith(`${sourceId}:`))),
+      dirty: true,
     })
   },
   reset: () =>
@@ -237,11 +375,16 @@ export const useStore = create<State>((set, get) => ({
     }),
   setBitmap: (id, bitmap) => set((state) => ({ bitmaps: new Map(state.bitmaps).set(id, bitmap) })),
   setSlot: (index, layerId) => {
-    get().commit()
-    set((state) => ({
-      tracks: state.tracks.map((track, i) =>
-        i === state.activeTrack
-          ? { ...track, slots: track.slots.map((s, j) => (j === index ? { layerId } : s)) }
+    const state = get()
+    state.commit()
+    const sourceId = layerId === null ? null : state.activeSourceId
+    set((current) => ({
+      tracks: current.tracks.map((track, i) =>
+        i === current.activeTrack
+          ? {
+              ...track,
+              slots: track.slots.map((slot, j) => (j === index ? { sourceId, layerId } : slot)),
+            }
           : track,
       ),
     }))
@@ -249,9 +392,10 @@ export const useStore = create<State>((set, get) => ({
   resolveSlot: (index, trackIndex) => {
     const state = get()
     const slots = state.tracks[trackIndex ?? state.activeTrack]?.slots ?? []
-    for (let i = Math.min(index, slots.length - 1); i >= 0; i--) {
+    for (let i = Math.min(index, slots.length - 1); i >= 0; i -= 1) {
       const slot = slots[i]
-      if (slot && slot.layerId !== null) return slot.layerId
+      const sourceId = slot?.sourceId ?? state.activeSourceId
+      if (slot && sourceId && slot.layerId !== null) return { sourceId, layerId: slot.layerId }
     }
     return null
   },
@@ -265,8 +409,10 @@ export const useStore = create<State>((set, get) => ({
     const trimmed = { ...state.trimmed }
     const tracks = state.tracks.map((track) => {
       if (next < track.slots.length) {
-        // 先把切掉的尾巴收起來，等使用者加回格數時原封不動放回去。
-        trimmed[track.id] = [...track.slots.slice(next), ...(trimmed[track.id] ?? [])]
+        trimmed[track.id] = [
+          ...track.slots.slice(next).map((slot) => ({ ...slot })),
+          ...(trimmed[track.id] ?? []),
+        ]
         return { ...track, slots: track.slots.slice(0, next) }
       }
       const cache = trimmed[track.id] ?? []
@@ -276,10 +422,8 @@ export const useStore = create<State>((set, get) => ({
         ...track,
         slots: [
           ...track.slots,
-          ...restored,
-          ...Array.from({ length: next - track.slots.length - restored.length }, () => ({
-            layerId: null,
-          })),
+          ...restored.map((slot) => ({ ...slot })),
+          ...Array.from({ length: next - track.slots.length - restored.length }, emptySlot),
         ],
       }
     })
@@ -372,28 +516,28 @@ export const useStore = create<State>((set, get) => ({
   },
   importCspTimeline: (timelineIndex) => {
     const state = get()
-    const timeline = state.doc?.cspTimelines[timelineIndex]
-    if (!timeline || !state.doc) return
+    const sourceId = state.activeSourceId
+    const doc = sourceId ? state.docs[sourceId] : null
+    const timeline = doc?.cspTimelines[timelineIndex]
+    if (!timeline || !doc || !sourceId) return
     const folder = (() => {
       const visit = (node: LayerNode): LayerNode | undefined =>
         node.id === timeline.animationFolderId
           ? node
           : node.children.map(visit).find((child) => child !== undefined)
-      return visit(state.doc.tree)
+      return visit(doc.tree)
     })()
     const byName = new Map(folder?.children.map((child) => [child.name, child.id]) ?? [])
-    const slots = Array.from({ length: timeline.frameCount }, () => ({
-      layerId: null as number | null,
-    }))
+    const slots = Array.from({ length: timeline.frameCount }, emptySlot)
     const missing = new Set<string>()
     for (const key of timeline.keys) {
       const layerId = byName.get(key.celName)
       if (key.frame < 0 || key.frame >= slots.length) continue
       if (layerId === undefined) missing.add(key.celName)
-      else slots[key.frame] = { layerId }
+      else slots[key.frame] = { sourceId, layerId }
     }
     const warnings = [...timeline.warnings]
-    if (missing.size) warnings.push(`找不到 cel：${[...missing].join('、')}`)
+    if (missing.size) warnings.push(`Missing cels: ${[...missing].join(', ')}`)
     state.commit()
     set({
       tracks: state.tracks.map((track, index) =>
@@ -403,7 +547,7 @@ export const useStore = create<State>((set, get) => ({
               ...track,
               slots: Array.from(
                 { length: timeline.frameCount },
-                (_, i) => track.slots[i] ?? { layerId: null },
+                (_, i) => track.slots[i] ?? emptySlot(),
               ),
             },
       ),
@@ -415,12 +559,13 @@ export const useStore = create<State>((set, get) => ({
     })
     state.toast(
       warnings.length ? 'info' : 'success',
-      `已帶入 CSP 時間軸：${timeline.frameCount} 格 @ ${timeline.frameRate} FPS，${timeline.keys.length} 個關鍵影格${warnings.length ? `；${warnings.join('；')}` : ''}`,
+      `Imported CSP timeline: ${timeline.frameCount} frames @ ${timeline.frameRate} FPS${
+        warnings.length ? ` (${warnings.join('; ')})` : ''
+      }`,
     )
   },
 }))
 
-/** 目前作用中的軌道；元件裡最常用到，集中在這裡避免每個地方各寫一次防呆。 */
 export function activeTrack(state: State): Track {
   return state.tracks[state.activeTrack] ?? state.tracks[0]!
 }

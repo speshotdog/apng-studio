@@ -4,7 +4,8 @@ const api: Api = {
   openClip: (filePath?: string) => ipcRenderer.invoke('clip:open', filePath),
   openClipBuffer: (bytes) => ipcRenderer.invoke('clip:openBuffer', bytes),
   getPathForFile: (file) => webUtils.getPathForFile(file),
-  renderLayer: (layerId, overrides) => ipcRenderer.invoke('clip:render', layerId, overrides),
+  renderLayer: (filePath, layerId, overrides) =>
+    ipcRenderer.invoke('clip:render', filePath, layerId, overrides),
   saveExport: (payload: ExportPayload) => ipcRenderer.invoke('export:save', payload),
   exportTo: (filePath, payload) => ipcRenderer.invoke('export:to', filePath, payload),
   saveMultiExport: (payloads) => ipcRenderer.invoke('export:saveMulti', payloads),

@@ -68,15 +68,27 @@ const slotPlan = planFromSlots([1, 2, 2, 2, 3], 20, true)
 assert.equal(slotPlan.actualFrameCount, 3)
 assert.equal(slotPlan.frames[1]!.delayMs, 150)
 assert.equal(slotPlan.totalDurationMs, 250)
-const oneTrack = (layerId: number | null) => [{ ...newTrack('t', 1), slots: [{ layerId }] }]
-useStore.setState({ tracks: oneTrack(5), activeTrack: 0 })
-assert.equal(useStore.getState().resolveSlot(3), 5)
+const sourceId = 'source-a'
+const oneTrack = (layerId: number | null) => [
+  { ...newTrack('t', 1), slots: [{ sourceId: layerId === null ? null : sourceId, layerId }] },
+]
+useStore.setState({
+  sources: [{ id: sourceId, path: 'a.clip', name: 'a.clip' }],
+  tracks: oneTrack(5),
+  activeTrack: 0,
+})
+assert.deepEqual(useStore.getState().resolveSlot(3), { sourceId, layerId: 5 })
 useStore.setState({ tracks: oneTrack(null), activeTrack: 0 })
 assert.equal(useStore.getState().resolveSlot(3), null)
 
 // 減少格數後再加回來，被切掉的內容要原封不動回來（避免手滑調低格數就白做）。
 useStore.setState({
-  tracks: [{ ...newTrack('t', 4), slots: [1, 2, 3, 4].map((layerId) => ({ layerId })) }],
+  tracks: [
+    {
+      ...newTrack('t', 4),
+      slots: [1, 2, 3, 4].map((layerId) => ({ sourceId, layerId })),
+    },
+  ],
   activeTrack: 0,
   trimmed: {},
 })

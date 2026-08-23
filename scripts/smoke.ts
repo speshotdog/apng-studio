@@ -322,7 +322,7 @@ async function run(): Promise<void> {
     const stats = [...document.querySelectorAll('.stats b')].map((node) => node.textContent)
     let opaquePixels = 0
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 0) opaquePixels++
-    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: smoke.getSlots(), inheritedId: state.resolveSlot(3), sourceId: smoke.getSlots()[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
+    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: smoke.getSlots(), inheritedId: state.resolveSlot(3)?.layerId ?? null, sourceId: smoke.getSlots()[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
   })()`)) as SmokeSnapshot
 
   assert.deepEqual(snapshot.celNames, ['1', '1a', '1b', '2', '3', '4'])
@@ -353,8 +353,9 @@ async function run(): Promise<void> {
 
   const visibilityChanged = await window.webContents.executeJavaScript(`(async () => {
     const before = [...document.querySelector('.stage canvas').getContext('2d').getImageData(0, 0, 360, 360).data]
-    const id = window.__smoke.store.getState().resolveSlot(0)
+    const id = window.__smoke.store.getState().resolveSlot(0)?.layerId
     const node = [...document.querySelectorAll('.layer-row')].find((row) => row.querySelector('.thumb')?.dataset.layerId === String(id))
+    if (!node) throw new Error('找不到對應的圖層列，layerId=' + String(id))
     node.querySelector('input[type=checkbox]').click()
     await window.__smoke.waitIdle()
     const after = [...document.querySelector('.stage canvas').getContext('2d').getImageData(0, 0, 360, 360).data]
@@ -901,6 +902,70 @@ async function run(): Promise<void> {
   assert.equal(packRoundTrip.pointerEvents, 'auto', '輸出目標下拉選單收不到滑鼠事件')
   assert.equal(packRoundTrip.covered, null, `輸出目標下拉選單被 ${packRoundTrip.covered} 蓋住`)
   assert.ok(packRoundTrip.width > 100, `輸出目標下拉選單只有 ${packRoundTrip.width}px 寬`)
+
+  // —— 素材庫：一個專案掛多個來源檔 ——
+  // 複製一份樣本當第二個來源（不同路徑 = 主程序會當成不同的文件）。
+  await writeFile(join(outputDir, 'second-source.clip'), await readFile(samplePath))
+  const multiSource = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    store.getState().set({ mode: 'animation' })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const first = store.getState().activeSourceId
+    const firstCount = store.getState().sources.length
+    // 直接呼叫 store 加第二個來源（UI 那條要開檔案對話框，測不了）。
+    const second = await window.api.openClip(${JSON.stringify(join(outputDir, 'second-source.clip'))})
+    if (!second) return { error: '第二個來源檔開不起來' }
+    const asset = { id: 'smoke-source-2', path: second.filePath, name: '12.clip' }
+    store.getState().addSource(asset, second)
+    await smoke.waitIdle()
+    const afterAdd = {
+      count: store.getState().sources.length,
+      active: store.getState().activeSourceId,
+      docSwitched: store.getState().doc?.filePath === second.filePath,
+      listed: document.querySelectorAll('.source-list .source-item').length,
+    }
+    // 在第二個來源上放一格，確認影格記得自己的來源。
+    const cels2 = smoke.getAnimationCels()
+    if (!cels2.length) return { error: '第二個來源沒有動畫 cel' }
+    store.getState().setSlot(0, cels2[0].id)
+    const slot0 = store.getState().tracks[store.getState().activeTrack].slots[0]
+    // 切回第一個來源，那一格仍然要指向第二個來源
+    store.getState().setActiveSource(first)
+    await smoke.waitIdle()
+    const afterSwitch = {
+      active: store.getState().activeSourceId,
+      slotSource: store.getState().tracks[store.getState().activeTrack].slots[0].sourceId,
+    }
+    // 移除第二個來源：用到它的格子要被清空，其他來源不受影響
+    store.getState().removeSource('smoke-source-2')
+    await smoke.waitIdle()
+    const afterRemove = {
+      count: store.getState().sources.length,
+      slot0: store.getState().tracks[store.getState().activeTrack].slots[0],
+      stillHasFirst: store.getState().sources.some((item) => item.id === first),
+    }
+    return { firstCount, slot0Source: slot0.sourceId, afterAdd, afterSwitch, afterRemove }
+  })()`)
+  assert.equal(multiSource.error, undefined, multiSource.error)
+  assert.equal(multiSource.firstCount, 1, '一開始應該只有一個來源')
+  assert.equal(multiSource.afterAdd.count, 2, '加入第二個來源後素材庫應該有兩筆')
+  assert.equal(multiSource.afterAdd.active, 'smoke-source-2', '加入後應該切成新的來源')
+  assert.equal(multiSource.afterAdd.docSwitched, true, 'doc 沒有跟著切到新來源')
+  assert.equal(multiSource.afterAdd.listed, 2, '素材面板沒有列出兩筆')
+  assert.equal(multiSource.slot0Source, 'smoke-source-2', '影格沒有記住自己的來源')
+  assert.notEqual(multiSource.afterSwitch.active, 'smoke-source-2', '沒有切回第一個來源')
+  assert.equal(
+    multiSource.afterSwitch.slotSource,
+    'smoke-source-2',
+    '切換 active 來源不該改掉影格既有的來源綁定',
+  )
+  assert.equal(multiSource.afterRemove.count, 1, '移除後素材庫應該剩一筆')
+  assert.deepEqual(
+    multiSource.afterRemove.slot0,
+    { sourceId: null, layerId: null },
+    '移除素材後，用到它的影格必須被清空',
+  )
+  assert.equal(multiSource.afterRemove.stillHasFirst, true, '不該連別的來源一起移除')
 
   // —— 專案選擇畫面：整趟走一次「離開 → 從列表點回來」——
   const startScreen = await window.webContents.executeJavaScript(`(async () => {

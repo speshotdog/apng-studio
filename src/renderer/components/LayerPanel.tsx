@@ -3,22 +3,28 @@ import type { LayerNode } from '../../preload/api.js'
 import { bitmapKey, ensureBitmap } from '../compose.js'
 import { useStore } from '../state/store.js'
 
-function Thumb({ node }: { node: LayerNode }): React.JSX.Element {
+function layerVisibilityKey(sourceId: string, layerId: number): string {
+  return `${sourceId}:${layerId}`
+}
+
+function Thumb({ node, sourceId }: { node: LayerNode; sourceId: string }): React.JSX.Element {
   const ref = useRef<HTMLCanvasElement>(null)
-  const bitmap = useStore((state) => state.bitmaps.get(bitmapKey(node.id, state.visibility)))
+  const bitmap = useStore((state) =>
+    state.bitmaps.get(bitmapKey(sourceId, node.id, state.visibility)),
+  )
   useEffect(() => {
     const element = ref.current
     if (!element) return
     if (node.type === 1584) return
     const observer = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting) {
-        void ensureBitmap(node.id).catch(() => undefined)
+        void ensureBitmap(sourceId, node.id).catch(() => undefined)
         observer.disconnect()
       }
     })
     observer.observe(element)
     return () => observer.disconnect()
-  }, [node.id, node.type])
+  }, [node.id, node.type, sourceId])
   useEffect(() => {
     const context = ref.current?.getContext('2d')
     if (!context || !bitmap) return
@@ -38,11 +44,20 @@ function Thumb({ node }: { node: LayerNode }): React.JSX.Element {
   )
 }
 
-function Row({ node, depth }: { node: LayerNode; depth: number }): React.JSX.Element {
+function Row({
+  node,
+  depth,
+  sourceId,
+}: {
+  node: LayerNode
+  depth: number
+  sourceId: string
+}): React.JSX.Element {
   const [open, setOpen] = useState(depth < 2)
   const visibility = useStore((state) => state.visibility)
   const set = useStore((state) => state.set)
-  const visible = visibility.get(node.id) ?? node.visible
+  const key = layerVisibilityKey(sourceId, node.id)
+  const visible = visibility.get(key) ?? node.visible
   return (
     <>
       <div
@@ -51,6 +66,7 @@ function Row({ node, depth }: { node: LayerNode; depth: number }): React.JSX.Ele
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData('application/x-layer-id', String(node.id))
+          event.dataTransfer.setData('application/x-source-id', sourceId)
           event.dataTransfer.effectAllowed = 'copyMove'
         }}
       >
@@ -63,21 +79,25 @@ function Row({ node, depth }: { node: LayerNode; depth: number }): React.JSX.Ele
           checked={visible}
           onChange={() => {
             const next = new Map(visibility)
-            next.set(node.id, !visible)
+            next.set(key, !visible)
             set({ visibility: next })
           }}
         />
-        <Thumb node={node} />
+        <Thumb node={node} sourceId={sourceId} />
         <span className="layer-name">{node.name || '未命名圖層'}</span>
         {node.isAnimationFolder && <small>動畫</small>}
       </div>
-      {open && node.children.map((child) => <Row key={child.id} node={child} depth={depth + 1} />)}
+      {open &&
+        node.children.map((child) => (
+          <Row key={child.id} node={child} depth={depth + 1} sourceId={sourceId} />
+        ))}
     </>
   )
 }
 
 export function LayerPanel(): React.JSX.Element {
   const doc = useStore((state) => state.doc)
+  const sourceId = useStore((state) => state.activeSourceId)
   return (
     <aside className="panel layers">
       <header>
@@ -94,9 +114,11 @@ export function LayerPanel(): React.JSX.Element {
         )}
       </header>
       <div className="tree">
-        {doc?.tree.children.map((child) => (
-          <Row key={child.id} node={child} depth={0} />
-        ))}
+        {doc &&
+          sourceId &&
+          doc.tree.children.map((child) => (
+            <Row key={child.id} node={child} depth={0} sourceId={sourceId} />
+          ))}
       </div>
       <div className="drag-hint">拖曳圖層至下方影格軌</div>
     </aside>

@@ -1,47 +1,71 @@
-import { useStore, type ScaleMode, type Track } from './state/store.js'
+import { useStore, type ResolvedSlot, type ScaleMode, type Track } from './state/store.js'
+
 export function bitmapToImageData(rgba: Uint8Array, width: number, height: number): ImageData {
   return new ImageData(new Uint8ClampedArray(rgba), width, height)
 }
-export function visibilitySignature(visibility: Map<number, boolean>): string {
+
+export function visibilitySignature(sourceId: string, visibility: Map<string, boolean>): string {
   return [...visibility]
-    .sort(([a], [b]) => a - b)
+    .filter(([key]) => key.startsWith(`${sourceId}:`))
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, shown]) => `${id}:${shown ? 1 : 0}`)
     .join(',')
 }
-export function bitmapKey(id: number, visibility: Map<number, boolean>): string {
-  return `${id}|${visibilitySignature(visibility)}`
+
+export function bitmapKey(
+  sourceId: string,
+  layerId: number,
+  visibility: Map<string, boolean>,
+): string {
+  return `${sourceId}:${layerId}|${visibilitySignature(sourceId, visibility)}`
 }
-export async function ensureBitmap(id: number): Promise<ImageBitmap> {
+
+function sourceOverrides(
+  sourceId: string,
+  visibility: Map<string, boolean>,
+): Array<[number, boolean]> {
+  return [...visibility].flatMap(([key, visible]) => {
+    if (!key.startsWith(`${sourceId}:`)) return []
+    const id = Number(key.slice(sourceId.length + 1))
+    return Number.isFinite(id) ? ([[id, visible]] as Array<[number, boolean]>) : []
+  })
+}
+
+export async function ensureBitmap(sourceId: string, layerId: number): Promise<ImageBitmap> {
   const state = useStore.getState()
-  const key = bitmapKey(id, state.visibility)
+  const key = bitmapKey(sourceId, layerId, state.visibility)
   const cached = state.bitmaps.get(key)
   if (cached) return cached
-  const value = await window.api.renderLayer(id, [...state.visibility])
+  const source = state.sourceOf(sourceId)
+  if (!source) throw new Error(`Source not found: ${sourceId}`)
+  const value = await window.api.renderLayer(
+    source.path,
+    layerId,
+    sourceOverrides(sourceId, state.visibility),
+  )
   const bitmap = await createImageBitmap(bitmapToImageData(value.rgba, value.width, value.height))
   useStore.getState().setBitmap(key, bitmap)
   return bitmap
 }
 
-/** 某一格會用到的所有圖層 id（跨全部軌道），拿來預先解碼 bitmap。 */
-export function frameLayerIds(index: number): number[] {
+export function frameLayerIds(index: number): ResolvedSlot[] {
   const state = useStore.getState()
   return state.tracks.flatMap((_, trackIndex) => {
-    const id = state.resolveSlot(index, trackIndex)
-    return id === null ? [] : [id]
+    const slot = state.resolveSlot(index, trackIndex)
+    return slot ? [slot] : []
   })
 }
 
-/** 整份專案會用到的所有圖層 id。 */
-export function allLayerIds(): number[] {
+export function allLayerIds(): ResolvedSlot[] {
   const state = useStore.getState()
-  const ids = new Set<number>()
+  const ids = new Map<string, ResolvedSlot>()
   state.tracks.forEach((track, trackIndex) =>
     track.slots.forEach((_, index) => {
-      const id = state.resolveSlot(index, trackIndex)
-      if (id !== null) ids.add(id)
+      const slot = state.resolveSlot(index, trackIndex)
+      if (slot) ids.set(`${slot.sourceId}:${slot.layerId}`, slot)
     }),
   )
-  return [...ids]
+  return [...ids.values()]
 }
 
 function drawTrack(
@@ -59,10 +83,6 @@ function drawTrack(
   ctx.globalAlpha = 1
 }
 
-/**
- * 把某一格的所有軌道疊出來。tracks[0] 在最上面，所以從陣列尾端往前畫。
- * 呼叫前必須先 ensureBitmap 過會用到的圖層，這裡只讀快取。
- */
 export function drawFrame(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   index: number,
@@ -74,11 +94,13 @@ export function drawFrame(
   ctx.clearRect(0, 0, width, height)
   ctx.imageSmoothingEnabled = mode === 'smooth'
   if (mode === 'smooth') ctx.imageSmoothingQuality = 'high'
-  for (let trackIndex = state.tracks.length - 1; trackIndex >= 0; trackIndex--) {
+  for (let trackIndex = state.tracks.length - 1; trackIndex >= 0; trackIndex -= 1) {
     const track = state.tracks[trackIndex]!
     if (!track.visible) continue
-    const id = state.resolveSlot(index, trackIndex)
-    const bitmap = id === null ? undefined : state.bitmaps.get(bitmapKey(id, state.visibility))
+    const slot = state.resolveSlot(index, trackIndex)
+    const bitmap = slot
+      ? state.bitmaps.get(bitmapKey(slot.sourceId, slot.layerId, state.visibility))
+      : undefined
     if (bitmap) drawTrack(ctx, track, bitmap, width, height)
   }
 }
@@ -91,7 +113,7 @@ export function composeFrame(
 ): Uint8Array {
   const canvas = new OffscreenCanvas(width, height)
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) throw new Error('無法建立影格畫布')
+  if (!ctx) throw new Error('Cannot create canvas context')
   drawFrame(ctx, slotIndex, width, height, mode)
   return new Uint8Array(ctx.getImageData(0, 0, width, height).data)
 }

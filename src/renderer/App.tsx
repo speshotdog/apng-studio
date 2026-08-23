@@ -8,11 +8,11 @@ import { PackPanel } from './components/PackPanel.js'
 import { ProjectPanel } from './components/ProjectPanel.js'
 import { SettingsDialog } from './components/SettingsDialog.js'
 import { StartScreen } from './components/StartScreen.js'
+import { SourcePanel } from './components/SourcePanel.js'
 import { Toasts } from './components/Toasts.js'
 import { TextPrompt } from './components/TextPrompt.js'
 import { DraftBrowser } from './components/DraftBrowser.js'
 import { createProjectFrom, guardUnsaved, saveCurrentProject } from './project.js'
-import { askConfirm } from './prompt.js'
 import type { MenuCommand, PublicSettings } from '../preload/api.js'
 
 const OPENABLE = /\.(clip|procreate|psd|psb)$/i
@@ -24,23 +24,14 @@ export function App(): React.JSX.Element {
   const [draftsOpen, setDraftsOpen] = useState(false)
   const [settings, setSettings] = useState<PublicSettings | null>(null)
 
-  /** 換來源檔：整個專案的來源會被換掉，所以要問清楚。 */
-  const replaceSource = async (path?: string): Promise<void> => {
-    if (!(await guardUnsaved('換來源檔'))) return
-    if (
-      !(await askConfirm(
-        '換掉這個專案的來源檔',
-        '影格會照圖層 id 重新對應，對不上的格子會變空白。要繼續嗎？',
-        '換來源檔',
-      ))
-    )
-      return
+  /** Add another source document without touching existing timeline slots. */
+  const addSourceFrom = async (path?: string): Promise<void> => {
     try {
       const doc = await window.api.openClip(path)
       if (!doc) return
-      store.open(doc)
-      set({ dirty: true })
-      toast('info', `來源檔已換成 ${doc.filePath.split(/[\\/]/).at(-1)}，記得重新確認影格`)
+      const name = doc.filePath.split(/[\\/]/).at(-1) ?? doc.filePath
+      store.addSource({ id: crypto.randomUUID(), path: doc.filePath, name }, doc)
+      toast('info', `已加入來源：${name}`)
     } catch (error) {
       toast('error', error instanceof Error ? error.message : String(error))
     }
@@ -54,7 +45,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     if (!new URLSearchParams(location.search).has('smoke')) return
     const smoke = (window as unknown as { __smoke?: Record<string, unknown> }).__smoke
-    if (smoke) smoke.openClipUi = replaceSource
+    if (smoke) smoke.openClipUi = addSourceFrom
   }, [])
 
   useEffect(
@@ -91,7 +82,7 @@ export function App(): React.JSX.Element {
         if (!path) return toast('error', '請從檔案總管拖曳檔案')
         // 在專案列表上丟來源檔就是開新專案；在編輯器裡丟則是換掉來源檔。
         if (state.screen === 'start') void createProjectFrom(path)
-        else void replaceSource(path)
+        else void addSourceFrom(path)
       }
       // 貼圖組頁面的格子自己會處理 PNG（drop 有 stopPropagation），
       // 掉到格子外面才會走到這裡，給個明確提示而不是「請拖入 .clip」。
@@ -151,8 +142,8 @@ export function App(): React.JSX.Element {
         <button onClick={() => void newProject()} title="從另一個來源檔建立新專案">
           新專案
         </button>
-        <button onClick={() => void replaceSource()} title="換掉這個專案的來源檔">
-          換來源檔
+        <button onClick={() => void addSourceFrom()} title="加入另一個來源檔">
+          加入來源
         </button>
         <button onClick={() => setDraftsOpen(true)} title="從草稿資料夾建立新專案">
           草稿
@@ -165,6 +156,7 @@ export function App(): React.JSX.Element {
         <>
           <div className="left-column">
             <ProjectPanel />
+            <SourcePanel onAdd={() => void addSourceFrom()} />
             <LayerPanel />
           </div>
           <div className="workspace">

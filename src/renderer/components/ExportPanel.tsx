@@ -42,10 +42,6 @@ export function ExportPanel(props: {
   const [upload, setUpload] = useState<{ bytes: Uint8Array; tags: string[] } | null>(null)
   const [giphyResult, setGiphyResult] = useState<GiphyUploadResult | null>(null)
   const targetSpec = EXPORT_TARGETS[lineTarget]
-  const resolvedIds = useMemo(
-    () => Array.from({ length: frames }, (_, i) => state.resolveSlot(i)),
-    [tracks, activeTrack, frames],
-  )
   /**
    * 規格檢查看的是「合成後的整張畫面」，不是單一軌道。多軌時只要有任何一軌換圖，
    * 該格就是新的一幀，所以拿全部軌道串起來當比對鍵。
@@ -53,7 +49,12 @@ export function ExportPanel(props: {
   const compositeKeys = useMemo(
     () =>
       Array.from({ length: frames }, (_, i) =>
-        tracks.map((_, trackIndex) => state.resolveSlot(i, trackIndex) ?? 'x').join('/'),
+        tracks
+          .map((_, trackIndex) => {
+            const slot = state.resolveSlot(i, trackIndex)
+            return slot ? `${slot.sourceId}:${slot.layerId}` : 'x'
+          })
+          .join('/'),
       ),
     [tracks, frames],
   )
@@ -211,8 +212,7 @@ export function ExportPanel(props: {
             sourcePath: '',
             ...encoded,
             editor: {
-              clipPath: doc.filePath,
-              clipName: doc.filePath.split(/[\\/]/).at(-1) ?? '',
+              sourceId: state.activeSourceId ?? undefined,
               state: captureEditorState(),
             },
           },
@@ -261,7 +261,9 @@ export function ExportPanel(props: {
     set({
       tracks: tracks.map((item, trackIndex) => ({
         ...item,
-        slots: autofix.order.map((frame) => ({ layerId: state.resolveSlot(frame, trackIndex) })),
+        slots: autofix.order.map(
+          (frame) => state.resolveSlot(frame, trackIndex) ?? { sourceId: null, layerId: null },
+        ),
       })),
       fps: autofix.fps,
       playCount: autofix.playCount,

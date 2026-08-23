@@ -496,11 +496,11 @@ var require_stream_writable = __commonJS({
       this.corkedRequestsFree = new CorkedRequest(this);
     }
     WritableState.prototype.getBuffer = function getBuffer() {
-      var current2 = this.bufferedRequest;
+      var current = this.bufferedRequest;
       var out = [];
-      while (current2) {
-        out.push(current2);
-        current2 = current2.next;
+      while (current) {
+        out.push(current);
+        current = current.next;
       }
       return out;
     };
@@ -31744,8 +31744,8 @@ async function setProgressExpanded(expanded) {
 }
 
 // src/main/ipc.ts
-var current = null;
 var currentPath = "";
+var documents = /* @__PURE__ */ new Map();
 var rendered = /* @__PURE__ */ new Map();
 function timestampName(now = /* @__PURE__ */ new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -31868,8 +31868,15 @@ async function exportPack(getWindow, requested, cells, target) {
     };
   }
 }
-function visibilityKey(layerId, overrides) {
-  return `${layerId}|${overrides.slice().sort(([a], [b]) => a - b).map(([id, visible]) => `${id}:${visible ? 1 : 0}`).join(",")}`;
+async function documentFor(filePath) {
+  const cached2 = documents.get(filePath);
+  if (cached2) return cached2;
+  const doc = await parseSource(filePath, await readFile3(filePath));
+  documents.set(filePath, doc);
+  return doc;
+}
+function visibilityKey(filePath, layerId, overrides) {
+  return `${filePath}|${layerId}|${overrides.slice().sort(([a], [b]) => a - b).map(([id, visible]) => `${id}:${visible ? 1 : 0}`).join(",")}`;
 }
 function node(layer) {
   return {
@@ -32084,9 +32091,8 @@ function registerIpc(getWindow) {
       filePath = picked.filePaths[0];
     }
     const doc = await parseSource(filePath, await readFile3(filePath));
-    current = doc;
+    documents.set(filePath, doc);
     currentPath = filePath;
-    rendered.clear();
     return {
       filePath,
       canvas: doc.canvas,
@@ -32096,28 +32102,35 @@ function registerIpc(getWindow) {
     };
   });
   ipcMain.handle("clip:openBuffer", async (_event, bytes) => {
+    const filePath = `dropped-${Date.now()}.clip`;
     const doc = await parseSource("dropped.clip", Buffer.from(bytes));
-    current = doc;
+    documents.set(filePath, doc);
     currentPath = "";
-    rendered.clear();
     return {
-      filePath: "\u62D6\u653E\u7684 .clip",
+      filePath,
       canvas: doc.canvas,
       timeline: doc.timeline,
       tree: node(doc.root),
       cspTimelines: doc.cspTimelines
     };
   });
-  ipcMain.handle("clip:render", (_event, layerId, overrides) => {
-    if (!current) throw new Error("\u8ACB\u5148\u958B\u555F .clip \u6A94\u6848");
-    const key = visibilityKey(layerId, overrides);
-    const cached2 = rendered.get(key);
-    if (cached2) return cached2;
-    const bitmap = current.renderNode(layerId, new Map(overrides));
-    const value = { width: bitmap.width, height: bitmap.height, rgba: new Uint8Array(bitmap.data) };
-    rendered.set(key, value);
-    return value;
-  });
+  ipcMain.handle(
+    "clip:render",
+    async (_event, filePath, layerId, overrides) => {
+      const current = await documentFor(filePath);
+      const key = visibilityKey(filePath, layerId, overrides);
+      const cached2 = rendered.get(key);
+      if (cached2) return cached2;
+      const bitmap = current.renderNode(layerId, new Map(overrides));
+      const value = {
+        width: bitmap.width,
+        height: bitmap.height,
+        rgba: new Uint8Array(bitmap.data)
+      };
+      rendered.set(key, value);
+      return value;
+    }
+  );
   ipcMain.handle("export:save", async (_event, payload) => {
     try {
       const extension = payload.format === "gif" ? "gif" : "png";
@@ -32485,7 +32498,7 @@ async function run() {
     const stats = [...document.querySelectorAll('.stats b')].map((node) => node.textContent)
     let opaquePixels = 0
     for (let i = 3; i < pixels.length; i += 4) if (pixels[i] > 0) opaquePixels++
-    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: smoke.getSlots(), inheritedId: state.resolveSlot(3), sourceId: smoke.getSlots()[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
+    return { celNames: cels.map((cel) => cel.name), celIds: cels.map((cel) => cel.id), slots: smoke.getSlots(), inheritedId: state.resolveSlot(3)?.layerId ?? null, sourceId: smoke.getSlots()[2].layerId, timelineFrameCount: Number(stats[0]), actualFrameCount: Number(stats[1]), opaquePixels }
   })()`);
   assert.deepEqual(snapshot.celNames, ["1", "1a", "1b", "2", "3", "4"]);
   assert.equal(snapshot.slots.length, 8);
@@ -32514,8 +32527,9 @@ async function run() {
   assert.equal(controls.playhead, 6);
   const visibilityChanged = await window2.webContents.executeJavaScript(`(async () => {
     const before = [...document.querySelector('.stage canvas').getContext('2d').getImageData(0, 0, 360, 360).data]
-    const id = window.__smoke.store.getState().resolveSlot(0)
+    const id = window.__smoke.store.getState().resolveSlot(0)?.layerId
     const node = [...document.querySelectorAll('.layer-row')].find((row) => row.querySelector('.thumb')?.dataset.layerId === String(id))
+    if (!node) throw new Error('\u627E\u4E0D\u5230\u5C0D\u61C9\u7684\u5716\u5C64\u5217\uFF0ClayerId=' + String(id))
     node.querySelector('input[type=checkbox]').click()
     await window.__smoke.waitIdle()
     const after = [...document.querySelector('.stage canvas').getContext('2d').getImageData(0, 0, 360, 360).data]
@@ -33033,6 +33047,67 @@ async function run() {
   assert.equal(packRoundTrip.pointerEvents, "auto", "\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u6536\u4E0D\u5230\u6ED1\u9F20\u4E8B\u4EF6");
   assert.equal(packRoundTrip.covered, null, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u88AB ${packRoundTrip.covered} \u84CB\u4F4F`);
   assert.ok(packRoundTrip.width > 100, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u53EA\u6709 ${packRoundTrip.width}px \u5BEC`);
+  await writeFile4(join5(outputDir, "second-source.clip"), await readFile4(samplePath));
+  const multiSource = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    store.getState().set({ mode: 'animation' })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const first = store.getState().activeSourceId
+    const firstCount = store.getState().sources.length
+    // \u76F4\u63A5\u547C\u53EB store \u52A0\u7B2C\u4E8C\u500B\u4F86\u6E90\uFF08UI \u90A3\u689D\u8981\u958B\u6A94\u6848\u5C0D\u8A71\u6846\uFF0C\u6E2C\u4E0D\u4E86\uFF09\u3002
+    const second = await window.api.openClip(${JSON.stringify(join5(outputDir, "second-source.clip"))})
+    if (!second) return { error: '\u7B2C\u4E8C\u500B\u4F86\u6E90\u6A94\u958B\u4E0D\u8D77\u4F86' }
+    const asset = { id: 'smoke-source-2', path: second.filePath, name: '12.clip' }
+    store.getState().addSource(asset, second)
+    await smoke.waitIdle()
+    const afterAdd = {
+      count: store.getState().sources.length,
+      active: store.getState().activeSourceId,
+      docSwitched: store.getState().doc?.filePath === second.filePath,
+      listed: document.querySelectorAll('.source-list .source-item').length,
+    }
+    // \u5728\u7B2C\u4E8C\u500B\u4F86\u6E90\u4E0A\u653E\u4E00\u683C\uFF0C\u78BA\u8A8D\u5F71\u683C\u8A18\u5F97\u81EA\u5DF1\u7684\u4F86\u6E90\u3002
+    const cels2 = smoke.getAnimationCels()
+    if (!cels2.length) return { error: '\u7B2C\u4E8C\u500B\u4F86\u6E90\u6C92\u6709\u52D5\u756B cel' }
+    store.getState().setSlot(0, cels2[0].id)
+    const slot0 = store.getState().tracks[store.getState().activeTrack].slots[0]
+    // \u5207\u56DE\u7B2C\u4E00\u500B\u4F86\u6E90\uFF0C\u90A3\u4E00\u683C\u4ECD\u7136\u8981\u6307\u5411\u7B2C\u4E8C\u500B\u4F86\u6E90
+    store.getState().setActiveSource(first)
+    await smoke.waitIdle()
+    const afterSwitch = {
+      active: store.getState().activeSourceId,
+      slotSource: store.getState().tracks[store.getState().activeTrack].slots[0].sourceId,
+    }
+    // \u79FB\u9664\u7B2C\u4E8C\u500B\u4F86\u6E90\uFF1A\u7528\u5230\u5B83\u7684\u683C\u5B50\u8981\u88AB\u6E05\u7A7A\uFF0C\u5176\u4ED6\u4F86\u6E90\u4E0D\u53D7\u5F71\u97FF
+    store.getState().removeSource('smoke-source-2')
+    await smoke.waitIdle()
+    const afterRemove = {
+      count: store.getState().sources.length,
+      slot0: store.getState().tracks[store.getState().activeTrack].slots[0],
+      stillHasFirst: store.getState().sources.some((item) => item.id === first),
+    }
+    return { firstCount, slot0Source: slot0.sourceId, afterAdd, afterSwitch, afterRemove }
+  })()`);
+  assert.equal(multiSource.error, void 0, multiSource.error);
+  assert.equal(multiSource.firstCount, 1, "\u4E00\u958B\u59CB\u61C9\u8A72\u53EA\u6709\u4E00\u500B\u4F86\u6E90");
+  assert.equal(multiSource.afterAdd.count, 2, "\u52A0\u5165\u7B2C\u4E8C\u500B\u4F86\u6E90\u5F8C\u7D20\u6750\u5EAB\u61C9\u8A72\u6709\u5169\u7B46");
+  assert.equal(multiSource.afterAdd.active, "smoke-source-2", "\u52A0\u5165\u5F8C\u61C9\u8A72\u5207\u6210\u65B0\u7684\u4F86\u6E90");
+  assert.equal(multiSource.afterAdd.docSwitched, true, "doc \u6C92\u6709\u8DDF\u8457\u5207\u5230\u65B0\u4F86\u6E90");
+  assert.equal(multiSource.afterAdd.listed, 2, "\u7D20\u6750\u9762\u677F\u6C92\u6709\u5217\u51FA\u5169\u7B46");
+  assert.equal(multiSource.slot0Source, "smoke-source-2", "\u5F71\u683C\u6C92\u6709\u8A18\u4F4F\u81EA\u5DF1\u7684\u4F86\u6E90");
+  assert.notEqual(multiSource.afterSwitch.active, "smoke-source-2", "\u6C92\u6709\u5207\u56DE\u7B2C\u4E00\u500B\u4F86\u6E90");
+  assert.equal(
+    multiSource.afterSwitch.slotSource,
+    "smoke-source-2",
+    "\u5207\u63DB active \u4F86\u6E90\u4E0D\u8A72\u6539\u6389\u5F71\u683C\u65E2\u6709\u7684\u4F86\u6E90\u7D81\u5B9A"
+  );
+  assert.equal(multiSource.afterRemove.count, 1, "\u79FB\u9664\u5F8C\u7D20\u6750\u5EAB\u61C9\u8A72\u5269\u4E00\u7B46");
+  assert.deepEqual(
+    multiSource.afterRemove.slot0,
+    { sourceId: null, layerId: null },
+    "\u79FB\u9664\u7D20\u6750\u5F8C\uFF0C\u7528\u5230\u5B83\u7684\u5F71\u683C\u5FC5\u9808\u88AB\u6E05\u7A7A"
+  );
+  assert.equal(multiSource.afterRemove.stillHasFirst, true, "\u4E0D\u8A72\u9023\u5225\u7684\u4F86\u6E90\u4E00\u8D77\u79FB\u9664");
   const startScreen = await window2.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, store = smoke.store
     const id = store.getState().project.id

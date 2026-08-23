@@ -1,4 +1,5 @@
-import type { ProjectBlob, ProjectMeta } from '../project/types.js'
+import type { ClipSummary } from '../preload/api.js'
+import type { EditorState, ProjectBlob, ProjectMeta, SourceAsset } from '../project/types.js'
 import { askConfirm, askText } from './prompt.js'
 import { applyEditorState, captureEditorState } from './snapshot.js'
 import { useStore } from './state/store.js'
@@ -21,6 +22,43 @@ export function captureBlob(): ProjectBlob {
       })),
     },
   }
+}
+
+function sourceName(filePath: string): string {
+  return filePath.split(/[\\/]/).at(-1) ?? filePath
+}
+
+function legacySource(meta: ProjectMeta): SourceAsset {
+  return {
+    id: crypto.randomUUID(),
+    path: meta.sourcePath,
+    name: meta.sourceName || sourceName(meta.sourcePath),
+  }
+}
+
+async function loadSourcesForState(
+  stored: EditorState,
+  meta: ProjectMeta,
+): Promise<{
+  sources: SourceAsset[]
+  docs: Record<string, ClipSummary>
+  changed: boolean
+  missing: string[]
+}> {
+  const requested = stored.sources?.length ? stored.sources : [legacySource(meta)]
+  const docs: Record<string, ClipSummary> = {}
+  const sources: SourceAsset[] = []
+  const missing: string[] = []
+  const changed = !stored.sources?.length
+  for (const source of requested) {
+    const doc = await window.api.openClip(source.path).catch(() => null)
+    sources.push(source)
+    // 讀不到就先當成「缺失」（docs 裡沒有這一筆），素材面板會標紅字讓使用者重新連結。
+    // 一份素材不見不該讓整個專案打不開 —— 其他張貼圖還是要能繼續做。
+    if (doc) docs[source.id] = doc
+    else missing.push(source.name || sourceName(source.path))
+  }
+  return { sources, docs, changed, missing }
 }
 
 function thumbnail(): string | undefined {
@@ -59,13 +97,14 @@ export async function saveCurrentProject(): Promise<boolean> {
 export async function saveAsNewProject(): Promise<ProjectMeta | null> {
   const state = useStore.getState()
   if (!state.doc) return null
+  const firstSource = state.sources[0]
   const name = await askText('另存新專案', `${state.project?.name ?? '未命名'} 拷貝`)
   if (!name) return null
   try {
     const meta = await window.api.createProject({
       name,
-      sourcePath: state.doc.filePath,
-      sourceName: state.doc.filePath.split(/[\\/]/).at(-1) ?? '',
+      sourcePath: firstSource?.path ?? state.doc.filePath,
+      sourceName: firstSource?.name ?? sourceName(state.doc.filePath),
       state: captureBlob(),
       thumbnailDataUrl: thumbnail(),
     })
@@ -97,27 +136,13 @@ export async function guardUnsaved(action: string): Promise<boolean> {
 /** 開啟一個既有專案：載入來源檔 → 套用狀態 →（必要時）詢問是否復原自動存檔。 */
 export async function openProject(meta: ProjectMeta): Promise<boolean> {
   const store = useStore.getState()
-  let doc = await window.api.openClip(meta.sourcePath).catch(() => null)
-  let sourceChanged = false
-  if (!doc) {
-    // 來源檔被搬走或改名時，如果不給補救的機會，這個專案就永遠打不開了。
-    const retry = await askConfirm(
-      '找不到來源檔',
-      `${meta.sourceName}\n${meta.sourcePath}\n\n檔案可能被搬走或改名了。要重新指定嗎？`,
-      '重新指定',
-    )
-    if (!retry) return false
-    doc = await window.api.openClip().catch(() => null)
-    if (!doc) return false
-    sourceChanged = true
-  }
   const blob = await window.api.readProject(meta.id)
   if (!blob) {
     store.toast('error', `專案「${meta.name}」讀不到內容`)
     return false
   }
-  store.open(doc)
   let restored = false
+  let stateBlob = blob
   if (meta.hasAutosave) {
     const autosave = await window.api.readProjectAutosave(meta.id)
     if (autosave) {
@@ -127,33 +152,44 @@ export async function openProject(meta: ProjectMeta): Promise<boolean> {
         `「${meta.name}」在 ${when} 有一份自動存檔，比你上次手動儲存的還新。\n要用它繼續嗎？（選「用已儲存的」會丟掉這份自動存檔）`,
         '復原自動存檔',
       )
-      if (restored) await applyBlob(autosave.state)
+      if (restored) stateBlob = autosave.state
       else await window.api.discardProjectAutosave(meta.id)
     }
   }
-  if (!restored) await applyBlob(blob)
-  const sourceName = doc.filePath.split(/[\\/]/).at(-1) ?? meta.sourceName
+  const loaded = await loadSourcesForState(stateBlob.state, meta)
+  if (!loaded) return false
+  store.loadSources(
+    loaded.sources,
+    loaded.docs,
+    stateBlob.state.activeSourceId ?? loaded.sources[0]?.id ?? null,
+  )
+  await applyBlob(stateBlob)
+  const firstSource = loaded.sources[0]
   useStore.getState().set({
     project: {
       ...meta,
-      sourcePath: doc.filePath,
-      sourceName,
+      sourcePath: firstSource?.path ?? meta.sourcePath,
+      sourceName: firstSource?.name ?? meta.sourceName,
       hasAutosave: false,
       autosaveAt: null,
     },
     screen: 'editor',
-    dirty: restored || sourceChanged,
+    dirty: restored || loaded.changed,
   })
-  if (sourceChanged) {
-    // 立刻把新的來源路徑寫回去，不然下次開還是找不到。
+  if (loaded.changed) {
     await saveCurrentProject()
-    store.toast('info', `來源檔已改指向 ${sourceName}`)
-  } else {
+  }
+  if (loaded.missing.length)
+    store.toast(
+      'error',
+      `有 ${loaded.missing.length} 個素材找不到檔案（${loaded.missing.join('、')}），` +
+        '請到左邊「素材」面板按「重新連結」。',
+    )
+  else
     store.toast(
       restored ? 'info' : 'success',
       restored ? `已復原「${meta.name}」的自動存檔，記得再存一次` : `已開啟「${meta.name}」`,
     )
-  }
   return true
 }
 

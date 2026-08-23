@@ -115,14 +115,23 @@ export function PackPanel(): React.JSX.Element {
       ))
     )
       return
-    const sameFile = state.doc?.filePath === cell.editor.clipPath
+    const source = cell.editor.sourceId ? state.sourceOf(cell.editor.sourceId) : undefined
+    const legacyPath = cell.editor.clipPath
+    const sameFile =
+      (source && state.activeSourceId === source.id) ||
+      (legacyPath && state.doc?.filePath === legacyPath)
     if (!sameFile) {
-      const doc = await window.api.openClip(cell.editor.clipPath).catch(() => null)
+      const doc = source
+        ? state.docs[source.id]
+        : legacyPath
+          ? await window.api.openClip(legacyPath).catch(() => null)
+          : null
       if (!doc) {
-        state.toast('error', `找不到原始檔案：${cell.editor.clipName}`)
+        state.toast('error', `找不到來源：${cell.editor.clipName ?? cell.editor.sourceId ?? ''}`)
         return
       }
-      useStore.getState().open(doc)
+      if (source) useStore.getState().setActiveSource(source.id)
+      else useStore.getState().open(doc)
     }
     applyEditorState(cell.editor.state)
     state.set({ mode: 'animation' })

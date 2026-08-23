@@ -45,12 +45,18 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     },
     getAnimationCels: animationCels,
     waitIdle: async () => {
-      const ids = new Set(animationCels().map(({ id }) => id))
+      const sourceId = useStore.getState().activeSourceId
+      const ids = new Map<string, { sourceId: string; layerId: number }>()
+      if (sourceId) {
+        animationCels().forEach(({ id }) => ids.set(`${sourceId}:${id}`, { sourceId, layerId: id }))
+      }
       document.querySelectorAll<HTMLCanvasElement>('.thumb[data-layer-id]').forEach((thumb) => {
-        if (thumb.dataset.thumbLoaded === 'false') ids.add(Number(thumb.dataset.layerId))
+        if (!sourceId || thumb.dataset.thumbLoaded !== 'false') return
+        const layerId = Number(thumb.dataset.layerId)
+        if (Number.isFinite(layerId)) ids.set(`${sourceId}:${layerId}`, { sourceId, layerId })
       })
-      allLayerIds().forEach((id) => ids.add(id))
-      await Promise.all([...ids].map(ensureBitmap))
+      allLayerIds().forEach((slot) => ids.set(`${slot.sourceId}:${slot.layerId}`, slot))
+      await Promise.all([...ids.values()].map((slot) => ensureBitmap(slot.sourceId, slot.layerId)))
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       )
@@ -69,11 +75,20 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     },
     // 影格與畫面調整改成掛在軌道上；煙霧測試沿用單軌語意，靠這幾個小工具轉接。
     getSlots: () => useStore.getState().tracks[useStore.getState().activeTrack]!.slots,
-    setSlots: (slots: { layerId: number | null }[]) => {
+    setSlots: (slots: { sourceId?: string | null; layerId: number | null }[]) => {
       const state = useStore.getState()
+      const sourceId = state.activeSourceId
       state.set({
         tracks: state.tracks.map((track, index) =>
-          index === state.activeTrack ? { ...track, slots } : track,
+          index === state.activeTrack
+            ? {
+                ...track,
+                slots: slots.map((slot) => ({
+                  sourceId: slot.layerId === null ? null : (slot.sourceId ?? sourceId),
+                  layerId: slot.layerId,
+                })),
+              }
+            : track,
         ),
       })
     },
@@ -116,7 +131,7 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     restoreStore: async (snapshot: Record<string, unknown>) => {
       useStore
         .getState()
-        .set({ ...snapshot, visibility: new Map(snapshot.visibility as Array<[number, boolean]>) })
+        .set({ ...snapshot, visibility: new Map(snapshot.visibility as Array<[string, boolean]>) })
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       )

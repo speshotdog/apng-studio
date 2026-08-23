@@ -94,7 +94,11 @@ export interface Api {
   openClip(filePath?: string): Promise<ClipSummary | null>
   openClipBuffer(bytes: Uint8Array): Promise<ClipSummary>
   getPathForFile(file: File): string
-  renderLayer(layerId: number, overrides: Array<[number, boolean]>): Promise<RenderedLayer>
+  renderLayer(
+    filePath: string,
+    layerId: number,
+    overrides: Array<[number, boolean]>,
+  ): Promise<RenderedLayer>
   saveExport(payload: ExportPayload): Promise<ExportResult>
   exportTo(filePath: string, payload: ExportPayload): Promise<ExportResult>
   saveMultiExport(

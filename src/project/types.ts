@@ -1,5 +1,11 @@
 import type { ExportTarget } from '../codec/line.js'
 
+export interface SourceAsset {
+  id: string
+  path: string
+  name: string
+}
+
 /** 一條圖層軌道的存檔格式；跟 renderer 的 Track 對齊。 */
 export interface StoredTrack {
   id: string
@@ -9,18 +15,20 @@ export interface StoredTrack {
   zoom: number
   offsetX: number
   offsetY: number
-  slots: { layerId: number | null }[]
+  slots: { sourceId?: string | null; layerId: number | null }[]
 }
 
 export interface EditorState {
+  sources?: SourceAsset[]
+  activeSourceId?: string
   /** v0.2 起用軌道；舊檔沒有這欄，讀取時由 slots + zoom/offset 轉出來。 */
   tracks?: StoredTrack[]
   /** v0.1 舊檔的單軌影格。 */
-  slots?: { layerId: number | null }[]
+  slots?: { sourceId?: string | null; layerId: number | null }[]
   zoom?: number
   offsetX?: number
   offsetY?: number
-  visibility: Array<[number, boolean]>
+  visibility: Array<[string, boolean]>
   fps: number
   playCount: number
   format: 'apng' | 'gif' | 'png'
@@ -91,8 +99,9 @@ export interface ProjectSnapshot {
 
 /** 從「單張動畫」存進貼圖組時一併帶著的編輯狀態，讓使用者能點回去繼續改。 */
 export interface PackCellEditor {
-  clipPath: string
-  clipName: string
+  sourceId?: string
+  clipPath?: string
+  clipName?: string
   state: EditorState
 }
 

@@ -51,8 +51,8 @@ import {
   setGiphy,
   setProgressExpanded,
 } from './settings.js'
-let current: SourceDocument | null = null
 let currentPath = ''
+const documents = new Map<string, SourceDocument>()
 const rendered = new Map<string, { width: number; height: number; rgba: Uint8Array }>()
 /** 匯出預設檔名：月日_時分，例如 8/23 03:19 → 0823_0319 */
 export function timestampName(now: Date = new Date()): string {
@@ -196,8 +196,20 @@ async function exportPack(
     }
   }
 }
-function visibilityKey(layerId: number, overrides: Array<[number, boolean]>): string {
-  return `${layerId}|${overrides
+async function documentFor(filePath: string): Promise<SourceDocument> {
+  const cached = documents.get(filePath)
+  if (cached) return cached
+  const doc = await parseSource(filePath, await readFile(filePath))
+  documents.set(filePath, doc)
+  return doc
+}
+
+function visibilityKey(
+  filePath: string,
+  layerId: number,
+  overrides: Array<[number, boolean]>,
+): string {
+  return `${filePath}|${layerId}|${overrides
     .slice()
     .sort(([a], [b]) => a - b)
     .map(([id, visible]) => `${id}:${visible ? 1 : 0}`)
@@ -428,9 +440,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       filePath = picked.filePaths[0]
     }
     const doc = await parseSource(filePath, await readFile(filePath))
-    current = doc
+    documents.set(filePath, doc)
     currentPath = filePath
-    rendered.clear()
     return {
       filePath,
       canvas: doc.canvas,
@@ -440,28 +451,35 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
   ipcMain.handle('clip:openBuffer', async (_event, bytes: Uint8Array): Promise<ClipSummary> => {
+    const filePath = `dropped-${Date.now()}.clip`
     const doc = await parseSource('dropped.clip', Buffer.from(bytes))
-    current = doc
+    documents.set(filePath, doc)
     currentPath = ''
-    rendered.clear()
     return {
-      filePath: '拖放的 .clip',
+      filePath,
       canvas: doc.canvas,
       timeline: doc.timeline,
       tree: node(doc.root),
       cspTimelines: doc.cspTimelines,
     }
   })
-  ipcMain.handle('clip:render', (_event, layerId: number, overrides: Array<[number, boolean]>) => {
-    if (!current) throw new Error('請先開啟 .clip 檔案')
-    const key = visibilityKey(layerId, overrides)
-    const cached = rendered.get(key)
-    if (cached) return cached
-    const bitmap = current.renderNode(layerId, new Map(overrides))
-    const value = { width: bitmap.width, height: bitmap.height, rgba: new Uint8Array(bitmap.data) }
-    rendered.set(key, value)
-    return value
-  })
+  ipcMain.handle(
+    'clip:render',
+    async (_event, filePath: string, layerId: number, overrides: Array<[number, boolean]>) => {
+      const current = await documentFor(filePath)
+      const key = visibilityKey(filePath, layerId, overrides)
+      const cached = rendered.get(key)
+      if (cached) return cached
+      const bitmap = current.renderNode(layerId, new Map(overrides))
+      const value = {
+        width: bitmap.width,
+        height: bitmap.height,
+        rgba: new Uint8Array(bitmap.data),
+      }
+      rendered.set(key, value)
+      return value
+    },
+  )
   ipcMain.handle('export:save', async (_event, payload: ExportPayload): Promise<ExportResult> => {
     try {
       const extension = payload.format === 'gif' ? 'gif' : 'png'

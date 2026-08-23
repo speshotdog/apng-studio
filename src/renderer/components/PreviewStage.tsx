@@ -12,7 +12,11 @@ export function PreviewStage(): React.JSX.Element {
     if (!canvas || !doc) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    await Promise.all(frameLayerIds(index).map((id) => ensureBitmap(id).catch(() => undefined)))
+    await Promise.all(
+      frameLayerIds(index).map((slot) =>
+        ensureBitmap(slot.sourceId, slot.layerId).catch(() => undefined),
+      ),
+    )
     drawFrame(ctx, index, canvas.width, canvas.height, scaleMode)
   }
   useEffect(() => {

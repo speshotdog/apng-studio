@@ -10,7 +10,7 @@ export async function createExportPayload(size?: {
 }): Promise<ExportPayload> {
   const state = useStore.getState()
   if (!state.doc) throw new Error('請先開啟 .clip 檔案')
-  await Promise.all(allLayerIds().map(ensureBitmap))
+  await Promise.all(allLayerIds().map((slot) => ensureBitmap(slot.sourceId, slot.layerId)))
   const current = useStore.getState()
   const spec = EXPORT_TARGETS[current.lineTarget]
   const frameCount = current.frameCount()

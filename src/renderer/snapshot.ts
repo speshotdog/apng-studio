@@ -1,10 +1,11 @@
-import type { EditorState, StoredTrack } from '../project/types.js'
-import { newTrack, useStore, type Track } from './state/store.js'
+import type { EditorState, SourceAsset, StoredTrack } from '../project/types.js'
+import { newTrack, useStore, type Slot, type Track } from './state/store.js'
 
-/** 把目前編輯狀態抓成可存檔的形狀。 */
 export function captureEditorState(): EditorState {
   const state = useStore.getState()
   return {
+    sources: state.sources,
+    activeSourceId: state.activeSourceId ?? undefined,
     tracks: state.tracks,
     visibility: [...state.visibility],
     fps: state.fps,
@@ -21,15 +22,41 @@ export function captureEditorState(): EditorState {
   }
 }
 
-/** v0.1 的存檔只有單軌 slots 加上全域 zoom/offset，讀進來轉成一條軌道。 */
-function tracksFrom(stored: EditorState): Track[] {
+function fallbackSource(stored: EditorState): SourceAsset | undefined {
+  const current = useStore.getState()
+  const storedSource = stored.sources?.[0]
+  if (storedSource) return storedSource
+  const loadedSource = current.sources[0]
+  if (loadedSource) return loadedSource
+  if (!current.doc) return undefined
+  return {
+    id: crypto.randomUUID(),
+    path: current.doc.filePath,
+    name: current.doc.filePath.split(/[\\/]/).at(-1) ?? current.doc.filePath,
+  }
+}
+
+function normalizeSlot(
+  slot: { sourceId?: string | null; layerId: number | null },
+  sourceId: string | null,
+): Slot {
+  return {
+    sourceId: slot.layerId === null ? null : (slot.sourceId ?? sourceId),
+    layerId: slot.layerId,
+  }
+}
+
+function tracksFrom(stored: EditorState, sourceId: string | null): Track[] {
   if (stored.tracks?.length)
-    return stored.tracks.map((track: StoredTrack) => ({ ...track, slots: track.slots.slice() }))
+    return stored.tracks.map((track: StoredTrack) => ({
+      ...track,
+      slots: track.slots.map((slot) => normalizeSlot(slot, sourceId)),
+    }))
   const track = newTrack('圖層 1', stored.slots?.length ?? 8)
   return [
     {
       ...track,
-      slots: stored.slots?.map((slot) => ({ ...slot })) ?? track.slots,
+      slots: stored.slots?.map((slot) => normalizeSlot(slot, sourceId)) ?? track.slots,
       zoom: stored.zoom ?? 1,
       offsetX: stored.offsetX ?? 0,
       offsetY: stored.offsetY ?? 0,
@@ -37,13 +64,38 @@ function tracksFrom(stored: EditorState): Track[] {
   ]
 }
 
-/** 套用存檔的編輯狀態；不會動到 doc 本身。 */
+function visibilityFrom(stored: EditorState, sourceId: string | null): Map<string, boolean> {
+  const entries = stored.visibility as Array<[string | number, boolean]>
+  return new Map(
+    entries.flatMap(([key, visible]) => {
+      if (typeof key === 'string') return [[key, visible] as [string, boolean]]
+      return sourceId ? [[`${sourceId}:${key}`, visible] as [string, boolean]] : []
+    }),
+  )
+}
+
 export function applyEditorState(stored: EditorState): void {
+  const state = useStore.getState()
+  const fallback = fallbackSource(stored)
+  const sources = stored.sources?.length ? stored.sources : fallback ? [fallback] : state.sources
+  const activeSourceId =
+    stored.activeSourceId && sources.some((source) => source.id === stored.activeSourceId)
+      ? stored.activeSourceId
+      : (fallback?.id ?? sources[0]?.id ?? null)
+  const docs =
+    fallback && state.doc && !state.docs[fallback.id]
+      ? { ...state.docs, [fallback.id]: state.doc }
+      : state.docs
+
   useStore.getState().set({
-    tracks: tracksFrom(stored),
+    sources,
+    activeSourceId,
+    docs,
+    doc: activeSourceId ? (docs[activeSourceId] ?? null) : null,
+    tracks: tracksFrom(stored, activeSourceId),
     activeTrack: 0,
     selection: [],
-    visibility: new Map(stored.visibility),
+    visibility: visibilityFrom(stored, activeSourceId),
     fps: stored.fps,
     playCount: stored.playCount,
     format: stored.format,
