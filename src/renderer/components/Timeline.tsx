@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { bitmapKey } from '../compose.js'
+import { askConfirm } from '../prompt.js'
 import { useStore, type Slot, type Track } from '../state/store.js'
 
 function SlotThumb({ bitmap }: { bitmap: ImageBitmap }): React.JSX.Element {
@@ -30,10 +31,10 @@ export function Timeline(): React.JSX.Element {
   const stripRef = useRef<HTMLDivElement>(null)
   const timelines = doc?.cspTimelines ?? []
 
-  const importTimeline = (index: number): void => {
+  const importTimeline = async (index: number): Promise<void> => {
     if (
       track.slots.some((slot) => slot.layerId !== null) &&
-      !window.confirm('目前影格軌已有內容，確定要覆蓋嗎？')
+      !(await askConfirm('帶入 CSP 時間軸', '目前影格軌已有內容，確定要覆蓋嗎？', '覆蓋'))
     )
       return
     state.importCspTimeline(index)
@@ -200,7 +201,9 @@ export function Timeline(): React.JSX.Element {
             disabled={tracks.length <= 1}
             onClick={(event) => {
               event.stopPropagation()
-              if (confirm(`刪除圖層「${item.name}」？`)) state.removeTrack(trackIndex)
+              void askConfirm('刪除圖層', `刪除圖層「${item.name}」？`, '刪除').then((yes) => {
+                if (yes) state.removeTrack(trackIndex)
+              })
             }}
           >
             ✕
@@ -308,6 +311,23 @@ export function Timeline(): React.JSX.Element {
         <button className="add-track" onClick={() => state.addTrack()} title="新增一層圖層軌道">
           ＋ 圖層
         </button>
+        <button
+          className="clear-canvas"
+          title="清掉所有影格與多餘圖層，保留目前開啟的檔案"
+          onClick={() =>
+            void askConfirm(
+              '清空畫布',
+              '會清掉所有軌道上的影格、只留一層空白圖層。目前開啟的檔案與匯出設定會保留，按 Ctrl+Z 可以復原。',
+              '清空',
+            ).then((yes) => {
+              if (!yes) return
+              state.clearCanvas()
+              state.toast('info', '已清空畫布')
+            })
+          }
+        >
+          🗑 清空畫布
+        </button>
         <span className="divider" />
         <button className="frame-add" onClick={() => state.resizeFrames(frames + 1)}>
           ＋ 加一格
@@ -340,7 +360,7 @@ export function Timeline(): React.JSX.Element {
             timelines.length === 0 ? '這個檔案沒有可用的 CSP 動畫時間軸' : '帶入 CSP 動畫時間軸'
           }
           onClick={() =>
-            timelines.length === 1 ? importTimeline(0) : setTimelineMenu((open) => !open)
+            timelines.length === 1 ? void importTimeline(0) : setTimelineMenu((open) => !open)
           }
         >
           帶入 CSP 時間軸
@@ -350,7 +370,7 @@ export function Timeline(): React.JSX.Element {
             {timelines.map((timeline, index) => (
               <button
                 key={`${timeline.animationFolderId}-${index}`}
-                onClick={() => importTimeline(index)}
+                onClick={() => void importTimeline(index)}
               >
                 {timeline.animationFolderName}
               </button>

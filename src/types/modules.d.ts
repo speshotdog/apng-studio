@@ -64,12 +64,9 @@ declare module 'gifenc' {
     palette: Palette,
     format?: 'rgb565' | 'rgb444' | 'rgba4444',
   ): Uint8Array
-  const gifenc: {
-    GIFEncoder: typeof GIFEncoder
-    quantize: typeof quantize
-    applyPalette: typeof applyPalette
-  }
-  export default gifenc
+  // ESM build 的 default 就是 GIFEncoder 本身，不是命名空間物件。
+  // 之前這裡宣告成 { GIFEncoder, ... }，害 renderer 端的 bug 通過了型別檢查。
+  export default GIFEncoder
 }
 
 declare module '*.css'

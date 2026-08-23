@@ -504,10 +504,11 @@ async function run(): Promise<void> {
     (await window.webContents.capturePage()).toPNG(),
   )
 
-  await window.webContents.executeJavaScript(`(() => {
+  await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke
     smoke.setSlots(Array.from({ length: 8 }, () => ({ layerId: null }))); smoke.store.getState().set({ playCount: 4, format: 'apng' })
-    window.confirm = () => true
+    // 等 React 重繪，否則 Timeline 還握著舊的軌道內容，會誤判成「已有內容」跳確認框。
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     document.querySelector('.timeline-tools .import-timeline').click()
   })()`)
   await new Promise((resolve) => setTimeout(resolve, 100))
@@ -613,10 +614,14 @@ async function run(): Promise<void> {
   const autofixUi = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
     window.__smoke.setSlots(cels.slice(0, 4).map((cel) => ({ layerId: cel.id }))); state.set({ mode: 'animation', fps: 20, exportWidth: 360, exportHeight: 360, playCount: 1, lineTarget: 'sticker', format: 'apng' })
-    window.confirm = () => true
     await smoke.waitIdle()
     document.querySelector('.autofix-button').click()
-    await new Promise((resolve) => setTimeout(resolve, 100)); await smoke.waitIdle()
+    // 確認框是自己畫的（不是原生 confirm），要真的去按下「套用」。
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const accept = document.querySelector('.text-prompt .prompt-confirm')
+    if (!accept) return { error: '一鍵符合規範沒有跳出確認框' }
+    accept.click()
+    await new Promise((resolve) => setTimeout(resolve, 200)); await smoke.waitIdle()
     const after = smoke.store.getState()
     return { slots: window.__smoke.getSlots().length, fps: after.fps, width: after.exportWidth, height: after.exportHeight, plays: after.playCount, errors: document.querySelectorAll('.issues .error').length }
   })()`)
@@ -650,7 +655,9 @@ async function run(): Promise<void> {
     const saved = await window.api.listProjects()
     window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
     document.querySelector('.project-row').click()
-    await new Promise((resolve) => setTimeout(resolve, 300)); await window.__smoke.waitIdle()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    document.querySelector('.text-prompt .prompt-confirm')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 400)); await window.__smoke.waitIdle()
     const restored = window.__smoke.store.getState()
     return { count: saved.length, staticFrame: restored.staticFrame, gifColors: restored.gifColors }
   })()`)
@@ -714,8 +721,11 @@ async function run(): Promise<void> {
     const state = window.__smoke.store.getState()
     state.set({ packCells: state.packCells.filter((cell) => cell.index !== 2 && cell.index !== 7) })
     await window.__smoke.waitIdle()
-    let message = ''; window.confirm = (value) => { message = value; return false }
     document.querySelector('.pack-workspace footer button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const dialog = document.querySelector('.text-prompt')
+    const message = dialog?.querySelector('.prompt-message')?.textContent ?? ''
+    dialog?.querySelectorAll('footer button')[0]?.click()
     await new Promise((resolve) => setTimeout(resolve, 50))
     return message
   })()`)
@@ -761,6 +771,89 @@ async function run(): Promise<void> {
   assert.equal(dropped.height, 360, '拖放解析的畫布高度必須與檔案路徑解析一致')
   assert.equal(dropped.frameRate, 20, '拖放解析的時間軸必須與檔案路徑解析一致')
   assert.deepEqual(dropped.celNames, snapshot.celNames, '拖放解析的圖層樹必須與檔案路徑解析一致')
+
+  // renderer 端的 gifenc build 跟主程序不同；GIPHY 上傳走的是這一條，
+  // 之前 default import 的形狀不對，一按就炸 GIFEncoder is not a function。
+  const rendererGif = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, cels = smoke.getAnimationCels()
+    smoke.setSlots(cels.map((cel) => ({ layerId: cel.id })))
+    smoke.store.getState().set({ lineTarget: 'sticker', format: 'apng', exportWidth: 270, exportHeight: 270 })
+    await smoke.waitIdle()
+    try {
+      return { bytes: await smoke.encodeGifHere() }
+    } catch (error) {
+      return { error: String(error && error.message ? error.message : error) }
+    }
+  })()`)
+  assert.equal(rendererGif.error, undefined, `renderer 端 GIF 編碼失敗：${rendererGif.error}`)
+  assert.ok(rendererGif.bytes > 1000, 'renderer 端 GIF 編碼出來的位元組太少')
+
+  // 存進貼圖組再點回來編輯，之後右側面板必須還能操作。
+  await window.webContents.executeJavaScript(
+    `window.addEventListener('error', (e) => { window.__smokeLastError = String(e.message) }); window.addEventListener('unhandledrejection', (e) => { window.__smokeLastError = String(e.reason && e.reason.message ? e.reason.message : e.reason) })`,
+  )
+  const packRoundTrip = await window.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    window.confirm = () => { throw new Error('不該再用原生 confirm') }
+    store.getState().set({ mode: 'animation', packTarget: 'sticker', packCount: 8, packCells: [] })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const saveButton = document.querySelector('.pack-save-button')
+    if (!saveButton) return { error: '找不到「存入貼圖組」按鈕' }
+    saveButton.click()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const saved = store.getState().packCells.length
+    store.getState().set({ mode: 'pack' })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const cell = document.querySelector('.pack-cell.editable')
+    if (!cell) return { saved, error: '貼圖組裡沒有可編輯的格子' }
+    cell.click()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    // 剛存進去的就是目前這份狀態，不該再跳「會覆蓋進度」的確認框。
+    const strayDialog = document.querySelector('.text-prompt')
+    if (strayDialog) return { saved, error: '點回同一份狀態不該再跳確認框' }
+    const select = document.querySelector('.line-targets')
+    if (!select)
+      return {
+        saved,
+        error:
+          '回到動畫頁後找不到輸出目標下拉選單｜mode=' +
+          store.getState().mode +
+          '｜appClass=' +
+          (document.querySelector('.app')?.className ?? '無') +
+          '｜hasExportPanel=' +
+          Boolean(document.querySelector('.panel.export')) +
+          '｜lastError=' +
+          (window.__smokeLastError ?? '無') +
+          '｜docPath=' +
+          (store.getState().doc?.filePath ?? '無') +
+          '｜editorPath=' +
+          (store.getState().packCells[0]?.editor?.clipPath ?? '無') +
+          '｜dirty=' +
+          store.getState().dirty +
+          '｜toasts=' +
+          store.getState().toasts.map((t) => t.level + ':' + t.text).join(' / '),
+      }
+    const box = select.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    const style = getComputedStyle(select)
+    return {
+      saved,
+      mode: store.getState().mode,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      disabled: select.disabled,
+      pointerEvents: style.pointerEvents,
+      visibility: style.visibility,
+      covered: hit === select ? null : (hit ? hit.className || hit.tagName : 'nothing'),
+    }
+  })()`)
+  assert.equal(packRoundTrip.error, undefined, packRoundTrip.error)
+  assert.equal(packRoundTrip.saved, 1, '「存入貼圖組」沒有存進去')
+  assert.equal(packRoundTrip.mode, 'animation', '點貼圖組格子應該回到單張動畫頁')
+  assert.equal(packRoundTrip.disabled, false, '輸出目標下拉選單被停用')
+  assert.equal(packRoundTrip.pointerEvents, 'auto', '輸出目標下拉選單收不到滑鼠事件')
+  assert.equal(packRoundTrip.covered, null, `輸出目標下拉選單被 ${packRoundTrip.covered} 蓋住`)
+  assert.ok(packRoundTrip.width > 100, `輸出目標下拉選單只有 ${packRoundTrip.width}px 寬`)
 
   console.table({
     cels: snapshot.celNames.join(', '),

@@ -97,6 +97,7 @@ export interface State {
   frameCount: () => number
   resizeFrames: (count: number) => void
   setTrack: (index: number, patch: Partial<Track>) => void
+  clearCanvas: () => void
   addTrack: () => void
   removeTrack: (index: number) => void
   moveTrack: (from: number, to: number) => void
@@ -275,6 +276,20 @@ export const useStore = create<State>((set, get) => ({
       playhead: Math.min(state.playhead, next - 1),
       staticFrame: Math.min(state.staticFrame, next - 1),
       selection: state.selection.filter((index) => index < next),
+    })
+  },
+  clearCanvas: () => {
+    const state = get()
+    state.commit()
+    set({
+      tracks: [newTrack('圖層 1', state.frameCount())],
+      activeTrack: 0,
+      selection: [],
+      selectedSlot: 0,
+      playhead: 0,
+      staticFrame: 0,
+      playing: false,
+      trimmed: {},
     })
   },
   setTrack: (index, patch) =>

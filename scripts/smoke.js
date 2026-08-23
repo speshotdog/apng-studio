@@ -29493,8 +29493,9 @@ function verifyApng(bytes) {
 }
 
 // src/codec/gif.ts
-var import_gifenc = __toESM(require_gifenc(), 1);
-var { GIFEncoder, applyPalette, quantize } = import_gifenc.default;
+var gifencModule = __toESM(require_gifenc(), 1);
+var gifenc = "GIFEncoder" in gifencModule ? gifencModule : gifencModule.default;
+var { GIFEncoder, applyPalette, quantize } = gifenc;
 function encodeGif(frames, width, height, opts) {
   if (frames.length === 0) throw new Error("GIF \u81F3\u5C11\u9700\u8981\u4E00\u5E40");
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0)
@@ -32110,10 +32111,11 @@ async function run() {
     join5(outputDir, "ui-line-fail.png"),
     (await window2.webContents.capturePage()).toPNG()
   );
-  await window2.webContents.executeJavaScript(`(() => {
+  await window2.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke
     smoke.setSlots(Array.from({ length: 8 }, () => ({ layerId: null }))); smoke.store.getState().set({ playCount: 4, format: 'apng' })
-    window.confirm = () => true
+    // \u7B49 React \u91CD\u7E6A\uFF0C\u5426\u5247 Timeline \u9084\u63E1\u8457\u820A\u7684\u8ECC\u9053\u5167\u5BB9\uFF0C\u6703\u8AA4\u5224\u6210\u300C\u5DF2\u6709\u5167\u5BB9\u300D\u8DF3\u78BA\u8A8D\u6846\u3002
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     document.querySelector('.timeline-tools .import-timeline').click()
   })()`);
   await new Promise((resolve2) => setTimeout(resolve2, 100));
@@ -32216,10 +32218,14 @@ async function run() {
   const autofixUi = await window2.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, state = smoke.store.getState(), cels = smoke.getAnimationCels()
     window.__smoke.setSlots(cels.slice(0, 4).map((cel) => ({ layerId: cel.id }))); state.set({ mode: 'animation', fps: 20, exportWidth: 360, exportHeight: 360, playCount: 1, lineTarget: 'sticker', format: 'apng' })
-    window.confirm = () => true
     await smoke.waitIdle()
     document.querySelector('.autofix-button').click()
-    await new Promise((resolve) => setTimeout(resolve, 100)); await smoke.waitIdle()
+    // \u78BA\u8A8D\u6846\u662F\u81EA\u5DF1\u756B\u7684\uFF08\u4E0D\u662F\u539F\u751F confirm\uFF09\uFF0C\u8981\u771F\u7684\u53BB\u6309\u4E0B\u300C\u5957\u7528\u300D\u3002
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const accept = document.querySelector('.text-prompt .prompt-confirm')
+    if (!accept) return { error: '\u4E00\u9375\u7B26\u5408\u898F\u7BC4\u6C92\u6709\u8DF3\u51FA\u78BA\u8A8D\u6846' }
+    accept.click()
+    await new Promise((resolve) => setTimeout(resolve, 200)); await smoke.waitIdle()
     const after = smoke.store.getState()
     return { slots: window.__smoke.getSlots().length, fps: after.fps, width: after.exportWidth, height: after.exportHeight, plays: after.playCount, errors: document.querySelectorAll('.issues .error').length }
   })()`);
@@ -32252,7 +32258,9 @@ async function run() {
     const saved = await window.api.listProjects()
     window.__smoke.store.getState().set({ fps: 33, staticFrame: 0, gifColors: 256 })
     document.querySelector('.project-row').click()
-    await new Promise((resolve) => setTimeout(resolve, 300)); await window.__smoke.waitIdle()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    document.querySelector('.text-prompt .prompt-confirm')?.click()
+    await new Promise((resolve) => setTimeout(resolve, 400)); await window.__smoke.waitIdle()
     const restored = window.__smoke.store.getState()
     return { count: saved.length, staticFrame: restored.staticFrame, gifColors: restored.gifColors }
   })()`);
@@ -32313,8 +32321,11 @@ async function run() {
     const state = window.__smoke.store.getState()
     state.set({ packCells: state.packCells.filter((cell) => cell.index !== 2 && cell.index !== 7) })
     await window.__smoke.waitIdle()
-    let message = ''; window.confirm = (value) => { message = value; return false }
     document.querySelector('.pack-workspace footer button').click()
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const dialog = document.querySelector('.text-prompt')
+    const message = dialog?.querySelector('.prompt-message')?.textContent ?? ''
+    dialog?.querySelectorAll('footer button')[0]?.click()
     await new Promise((resolve) => setTimeout(resolve, 50))
     return message
   })()`);
@@ -32352,6 +32363,84 @@ async function run() {
   assert.equal(dropped.height, 360, "\u62D6\u653E\u89E3\u6790\u7684\u756B\u5E03\u9AD8\u5EA6\u5FC5\u9808\u8207\u6A94\u6848\u8DEF\u5F91\u89E3\u6790\u4E00\u81F4");
   assert.equal(dropped.frameRate, 20, "\u62D6\u653E\u89E3\u6790\u7684\u6642\u9593\u8EF8\u5FC5\u9808\u8207\u6A94\u6848\u8DEF\u5F91\u89E3\u6790\u4E00\u81F4");
   assert.deepEqual(dropped.celNames, snapshot.celNames, "\u62D6\u653E\u89E3\u6790\u7684\u5716\u5C64\u6A39\u5FC5\u9808\u8207\u6A94\u6848\u8DEF\u5F91\u89E3\u6790\u4E00\u81F4");
+  const rendererGif = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, cels = smoke.getAnimationCels()
+    smoke.setSlots(cels.map((cel) => ({ layerId: cel.id })))
+    smoke.store.getState().set({ lineTarget: 'sticker', format: 'apng', exportWidth: 270, exportHeight: 270 })
+    await smoke.waitIdle()
+    try {
+      return { bytes: await smoke.encodeGifHere() }
+    } catch (error) {
+      return { error: String(error && error.message ? error.message : error) }
+    }
+  })()`);
+  assert.equal(rendererGif.error, void 0, `renderer \u7AEF GIF \u7DE8\u78BC\u5931\u6557\uFF1A${rendererGif.error}`);
+  assert.ok(rendererGif.bytes > 1e3, "renderer \u7AEF GIF \u7DE8\u78BC\u51FA\u4F86\u7684\u4F4D\u5143\u7D44\u592A\u5C11");
+  await window2.webContents.executeJavaScript(
+    `window.addEventListener('error', (e) => { window.__smokeLastError = String(e.message) }); window.addEventListener('unhandledrejection', (e) => { window.__smokeLastError = String(e.reason && e.reason.message ? e.reason.message : e.reason) })`
+  );
+  const packRoundTrip = await window2.webContents.executeJavaScript(`(async () => {
+    const smoke = window.__smoke, store = smoke.store
+    window.confirm = () => { throw new Error('\u4E0D\u8A72\u518D\u7528\u539F\u751F confirm') }
+    store.getState().set({ mode: 'animation', packTarget: 'sticker', packCount: 8, packCells: [] })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const saveButton = document.querySelector('.pack-save-button')
+    if (!saveButton) return { error: '\u627E\u4E0D\u5230\u300C\u5B58\u5165\u8CBC\u5716\u7D44\u300D\u6309\u9215' }
+    saveButton.click()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const saved = store.getState().packCells.length
+    store.getState().set({ mode: 'pack' })
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    const cell = document.querySelector('.pack-cell.editable')
+    if (!cell) return { saved, error: '\u8CBC\u5716\u7D44\u88E1\u6C92\u6709\u53EF\u7DE8\u8F2F\u7684\u683C\u5B50' }
+    cell.click()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    // \u525B\u5B58\u9032\u53BB\u7684\u5C31\u662F\u76EE\u524D\u9019\u4EFD\u72C0\u614B\uFF0C\u4E0D\u8A72\u518D\u8DF3\u300C\u6703\u8986\u84CB\u9032\u5EA6\u300D\u7684\u78BA\u8A8D\u6846\u3002
+    const strayDialog = document.querySelector('.text-prompt')
+    if (strayDialog) return { saved, error: '\u9EDE\u56DE\u540C\u4E00\u4EFD\u72C0\u614B\u4E0D\u8A72\u518D\u8DF3\u78BA\u8A8D\u6846' }
+    const select = document.querySelector('.line-targets')
+    if (!select)
+      return {
+        saved,
+        error:
+          '\u56DE\u5230\u52D5\u756B\u9801\u5F8C\u627E\u4E0D\u5230\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\uFF5Cmode=' +
+          store.getState().mode +
+          '\uFF5CappClass=' +
+          (document.querySelector('.app')?.className ?? '\u7121') +
+          '\uFF5ChasExportPanel=' +
+          Boolean(document.querySelector('.panel.export')) +
+          '\uFF5ClastError=' +
+          (window.__smokeLastError ?? '\u7121') +
+          '\uFF5CdocPath=' +
+          (store.getState().doc?.filePath ?? '\u7121') +
+          '\uFF5CeditorPath=' +
+          (store.getState().packCells[0]?.editor?.clipPath ?? '\u7121') +
+          '\uFF5Cdirty=' +
+          store.getState().dirty +
+          '\uFF5Ctoasts=' +
+          store.getState().toasts.map((t) => t.level + ':' + t.text).join(' / '),
+      }
+    const box = select.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    const style = getComputedStyle(select)
+    return {
+      saved,
+      mode: store.getState().mode,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      disabled: select.disabled,
+      pointerEvents: style.pointerEvents,
+      visibility: style.visibility,
+      covered: hit === select ? null : (hit ? hit.className || hit.tagName : 'nothing'),
+    }
+  })()`);
+  assert.equal(packRoundTrip.error, void 0, packRoundTrip.error);
+  assert.equal(packRoundTrip.saved, 1, "\u300C\u5B58\u5165\u8CBC\u5716\u7D44\u300D\u6C92\u6709\u5B58\u9032\u53BB");
+  assert.equal(packRoundTrip.mode, "animation", "\u9EDE\u8CBC\u5716\u7D44\u683C\u5B50\u61C9\u8A72\u56DE\u5230\u55AE\u5F35\u52D5\u756B\u9801");
+  assert.equal(packRoundTrip.disabled, false, "\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u88AB\u505C\u7528");
+  assert.equal(packRoundTrip.pointerEvents, "auto", "\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u6536\u4E0D\u5230\u6ED1\u9F20\u4E8B\u4EF6");
+  assert.equal(packRoundTrip.covered, null, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u88AB ${packRoundTrip.covered} \u84CB\u4F4F`);
+  assert.ok(packRoundTrip.width > 100, `\u8F38\u51FA\u76EE\u6A19\u4E0B\u62C9\u9078\u55AE\u53EA\u6709 ${packRoundTrip.width}px \u5BEC`);
   console.table({
     cels: snapshot.celNames.join(", "),
     dropCels: dropped.celNames.join(", "),

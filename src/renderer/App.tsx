@@ -10,7 +10,7 @@ import { SettingsDialog } from './components/SettingsDialog.js'
 import { Toasts } from './components/Toasts.js'
 import { DraftBrowser } from './components/DraftBrowser.js'
 import { TextPrompt } from './components/TextPrompt.js'
-import { askText } from './prompt.js'
+import { askConfirm, askText } from './prompt.js'
 import type { MenuCommand, PublicSettings } from '../preload/api.js'
 
 const OPENABLE = /\.(clip|procreate|psd|psb)$/i
@@ -28,8 +28,10 @@ export function App(): React.JSX.Element {
    */
   const guardUnsaved = async (action: string): Promise<boolean> => {
     if (!useStore.getState().dirty) return true
-    const answer = window.confirm(
-      `目前的動畫還沒儲存進度。\n\n按「確定」先儲存再${action}，按「取消」回去繼續編輯。`,
+    const answer = await askConfirm(
+      '還沒儲存進度',
+      `目前的動畫還沒儲存。按「先儲存」會存成一份進度再${action}。`,
+      '先儲存',
     )
     if (!answer) return false
     const name = await askText('進度名稱', timestampName())

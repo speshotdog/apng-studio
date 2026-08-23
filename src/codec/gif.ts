@@ -1,6 +1,20 @@
-import gifenc from 'gifenc'
+import * as gifencModule from 'gifenc'
 import type { ApngFrame } from './apng.js'
 
+/**
+ * gifenc 沒有 `exports` map，兩種 build 的形狀不一樣，而且會依環境挑不同的檔：
+ * - Vite（renderer）走 `module` → ESM build：有具名匯出，**default 是 GIFEncoder 本身**
+ * - Node ESM（tsx 驗證腳本）走 `main` → CJS build：拿不到具名匯出，
+ *   只有 default，裡面才是 `{ GIFEncoder, ... }`
+ *
+ * 原本寫 `import gifenc from 'gifenc'` 再解構，在主程序剛好能動，
+ * 但 renderer 拿到的 default 是函式，`gifenc.GIFEncoder` 是 undefined，
+ * 「上傳到 GIPHY」就會炸 `GIFEncoder is not a function`。這裡兩種都接。
+ */
+const gifenc = ('GIFEncoder' in gifencModule
+  ? gifencModule
+  : (gifencModule as unknown as { default: typeof gifencModule })
+      .default) as unknown as typeof gifencModule
 const { GIFEncoder, applyPalette, quantize } = gifenc
 
 export interface GifOptions {

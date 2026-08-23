@@ -2,7 +2,8 @@ import React from 'react'
 import { EXPORT_TARGETS, type ExportTarget } from '../../codec/line.js'
 import type { PackImportCell } from '../../project/types.js'
 import { packImportMessage } from '../packMessage.js'
-import { applyEditorState } from '../snapshot.js'
+import { askConfirm } from '../prompt.js'
+import { applyEditorState, captureEditorState } from '../snapshot.js'
 import { useStore } from '../state/store.js'
 
 function errorFor(
@@ -63,7 +64,19 @@ export function PackPanel(): React.JSX.Element {
   /** 點一格有編輯狀態的貼圖 → 回到單張動畫頁繼續改。 */
   const editCell = async (cell: PackImportCell): Promise<void> => {
     if (!cell.editor) return
-    if (state.dirty && !confirm('回到編輯畫面會覆蓋目前的動畫進度，繼續嗎？')) return
+    // 剛按完「存入貼圖組」時 dirty 一定是 true，但要載入的就是同一份狀態，
+    // 這時候再跳一次「會覆蓋進度」只是擋路，所以先比對過再決定要不要問。
+    const same = JSON.stringify(captureEditorState()) === JSON.stringify(cell.editor.state)
+    if (
+      state.dirty &&
+      !same &&
+      !(await askConfirm(
+        '回到這張的編輯畫面',
+        '目前動畫頁上還沒儲存的調整會被覆蓋，繼續嗎？',
+        '繼續',
+      ))
+    )
+      return
     const sameFile = state.doc?.filePath === cell.editor.clipPath
     if (!sameFile) {
       const doc = await window.api.openClip(cell.editor.clipPath).catch(() => null)
@@ -82,9 +95,11 @@ export function PackPanel(): React.JSX.Element {
     const missing = indexes.filter((index) => !cells.has(index))
     if (
       (missing.length || errors.length) &&
-      !confirm(
+      !(await askConfirm(
+        '貼圖組還沒完成',
         `尚有空格：${missing.map((index) => (typeof index === 'number' ? String(index).padStart(2, '0') : index)).join('、') || '無'}；${errors.length} 項錯誤，仍要打包嗎？`,
-      )
+        '仍要打包',
+      ))
     )
       return
     const result = await window.api.exportPack(

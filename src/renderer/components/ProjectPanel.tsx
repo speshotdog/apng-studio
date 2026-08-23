@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ProjectSnapshot } from '../../project/types.js'
-import { askText } from '../prompt.js'
+import { askConfirm, askText } from '../prompt.js'
 import { applyEditorState, captureEditorState } from '../snapshot.js'
 import { useStore } from '../state/store.js'
 
@@ -62,7 +62,15 @@ export function ProjectPanel(): React.JSX.Element {
   }
   const load = async (snapshot: ProjectSnapshot): Promise<void> => {
     const current = useStore.getState()
-    if (current.dirty && !confirm(`要載入「${snapshot.name}」嗎？尚未儲存的調整會遺失。`)) return
+    if (
+      current.dirty &&
+      !(await askConfirm(
+        '載入進度',
+        `要載入「${snapshot.name}」嗎？尚未儲存的調整會遺失。`,
+        '載入',
+      ))
+    )
+      return
     let doc = snapshot.clipPath
       ? await window.api.openClip(snapshot.clipPath).catch(() => null)
       : null
@@ -161,8 +169,9 @@ export function ProjectPanel(): React.JSX.Element {
                 <button
                   onClick={(event) => {
                     event.stopPropagation()
-                    if (confirm(`刪除「${project.name}」？`))
-                      void window.api.deleteProject(project.id).then(setProjects)
+                    void askConfirm('刪除進度', `刪除「${project.name}」？`, '刪除').then((yes) => {
+                      if (yes) void window.api.deleteProject(project.id).then(setProjects)
+                    })
                   }}
                 >
                   刪除

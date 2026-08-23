@@ -6,6 +6,7 @@ import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
 import { useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
+import { askConfirm } from '../prompt.js'
 import { captureEditorState } from '../snapshot.js'
 import { saveCurrentSnapshot, timestampName } from './ProjectPanel.js'
 
@@ -146,10 +147,14 @@ export function ExportPanel(props: {
     })
   }
   const exportNow = async (): Promise<void> => {
+    if (!doc) return
     if (
-      !doc ||
-      (errors.length &&
-        !confirm(`${targetSpec.platform} 規格檢查有 ${errors.length} 項錯誤，仍要匯出嗎？`))
+      errors.length &&
+      !(await askConfirm(
+        `${targetSpec.platform} 規格檢查沒過`,
+        `有 ${errors.length} 項錯誤，仍要匯出嗎？`,
+        '仍要匯出',
+      ))
     )
       return
     setBusy(true)
@@ -239,7 +244,14 @@ export function ExportPanel(props: {
     if (!autofix) return
     const lines = autofix.changes.map((change) => `${change.label}　${change.from} → ${change.to}`)
     const unresolved = autofix.unresolved.map((message) => `仍需處理：${message}`)
-    if (!confirm(`將套用以下調整：\n\n${[...lines, ...unresolved].join('\n')}`)) return
+    if (
+      !(await askConfirm(
+        '一鍵符合規範',
+        `將套用以下調整：\n${[...lines, ...unresolved].join('\n')}`,
+        '套用',
+      ))
+    )
+      return
     await saveCurrentSnapshot(`一鍵符合規範前_${timestampName()}`)
     state.commit()
     // 補幀後的順序要同時套到每一條軌道，多軌的動作才不會被拆散。

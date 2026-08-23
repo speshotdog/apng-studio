@@ -2,7 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App.js'
 import { allLayerIds, composeFrame, ensureBitmap } from './compose.js'
-import { exportTo } from './export.js'
+import { createExportPayload, exportTo } from './export.js'
+import { encodeGif } from '../codec/gif.js'
 import { packImportMessage } from './packMessage.js'
 import { useStore } from './state/store.js'
 import './styles.css'
@@ -44,6 +45,14 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
     },
     exportTo,
     composeFrame,
+    // renderer 端的 GIF 編碼（GIPHY 上傳走這條），跟主程序是不同的 gifenc build。
+    encodeGifHere: async () => {
+      const payload = await createExportPayload()
+      return encodeGif(payload.frames, payload.width, payload.height, {
+        numPlays: payload.numPlays,
+        maxColors: 256,
+      }).bytes.length
+    },
     // 影格與畫面調整改成掛在軌道上；煙霧測試沿用單軌語意，靠這幾個小工具轉接。
     getSlots: () => useStore.getState().tracks[useStore.getState().activeTrack]!.slots,
     setSlots: (slots: { layerId: number | null }[]) => {

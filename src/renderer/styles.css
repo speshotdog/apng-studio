@@ -973,6 +973,10 @@ select {
   border-color: var(--accent);
   color: var(--accent);
 }
+.clear-canvas {
+  border-color: #6d3a31;
+  color: #f3b6ab;
+}
 
 /* —— 草稿資料夾 —— */
 .draft-browser .draft-path {
@@ -1032,6 +1036,14 @@ select {
 /* —— 自製輸入對話框（Electron 沒有 window.prompt） —— */
 .text-prompt {
   width: min(380px, calc(100vw - 32px));
+}
+.text-prompt .prompt-message {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 .text-prompt input {
   width: 100%;

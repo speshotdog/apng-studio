@@ -1,46 +1,74 @@
 /**
- * Electron 的 renderer 不支援 window.prompt（會直接丟
- * 「prompt() is not supported.」），所以「儲存進度」那種要輸入名稱的流程
- * 在打包後其實一次都沒成功過。這裡用一個自己畫的對話框取代。
+ * 自己畫的輸入／確認對話框。
+ *
+ * 兩個理由不用瀏覽器內建的：
+ * 1. Electron 的 renderer **不支援 `window.prompt`**（直接丟
+ *    「prompt() is not supported.」），所以「儲存進度」那種流程一次都沒成功過。
+ * 2. `window.confirm` 是會擋住整個 renderer 的原生視窗。跳完之後 Chromium 的
+ *    user activation 會被吃掉，緊接著去點 `<select>` 有機會叫不出原生下拉清單，
+ *    看起來就像「選單壞掉不能點」。從貼圖組跳回編輯畫面就會踩到這條。
  */
-export interface PromptRequest {
+export interface DialogRequest {
+  kind: 'text' | 'confirm'
   title: string
+  message?: string
   value: string
   placeholder?: string
+  confirmLabel: string
   resolve: (value: string | null) => void
 }
 
-type Listener = (request: PromptRequest | null) => void
+type Listener = (request: DialogRequest | null) => void
 
-let current: PromptRequest | null = null
+let current: DialogRequest | null = null
 const listeners = new Set<Listener>()
 
-function emit(request: PromptRequest | null): void {
+function emit(request: DialogRequest | null): void {
   current = request
   listeners.forEach((listener) => listener(request))
 }
 
-export function subscribePrompt(listener: Listener): () => void {
+export function subscribeDialog(listener: Listener): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
 
-export function currentPrompt(): PromptRequest | null {
-  return current
-}
-
 /** 回傳修剪過的字串；使用者取消或留空回傳 null。 */
 export function askText(title: string, value = '', placeholder?: string): Promise<string | null> {
-  // 同時只會有一個輸入框；如果前一個還開著，先當作取消。
+  // 同時只會有一個對話框；如果前一個還開著，先當作取消。
   current?.resolve(null)
   return new Promise((resolve) => {
     emit({
+      kind: 'text',
       title,
       value,
       placeholder,
+      confirmLabel: '確定',
       resolve: (answer) => {
         emit(null)
         resolve(answer && answer.trim() ? answer.trim() : null)
+      },
+    })
+  })
+}
+
+/** 取代 window.confirm。按下確認回傳 true。 */
+export function askConfirm(
+  title: string,
+  message?: string,
+  confirmLabel = '確定',
+): Promise<boolean> {
+  current?.resolve(null)
+  return new Promise((resolve) => {
+    emit({
+      kind: 'confirm',
+      title,
+      message,
+      value: '',
+      confirmLabel,
+      resolve: (answer) => {
+        emit(null)
+        resolve(answer !== null)
       },
     })
   })
