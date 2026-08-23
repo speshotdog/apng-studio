@@ -40,6 +40,16 @@ function findCurve(node: BincNode): BincNode | undefined {
   return undefined
 }
 
+/** 影格數的上限。CSP 允許很長的時間軸，但我們的影格軌撐不住也沒意義。 */
+const MAX_FRAMES = 240
+
+/**
+ * 讀取 .clip 內建的動畫時間軸。
+ *
+ * **這裡任何一條時間軸壞掉都不可以讓整個檔案開不起來** —— 使用者只是想開圖層來排幀，
+ * 不該因為某條時間軸格式沒見過就完全打不開。所以每條 track 各自 try/catch，
+ * 失敗就跳過並留下警告。
+ */
 export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): CspTimeline[] {
   const layers = new Map<string, { id: number; name: string }>()
   for (const row of queryRows(
@@ -56,12 +66,16 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
     db,
     'SELECT FrameRate, StartFrame, EndFrame, FirstTrack FROM TimeLine',
   )) {
-    const frameRate = numberValue(timeline, 'FrameRate')
-    const frameCount = numberValue(timeline, 'EndFrame') - numberValue(timeline, 'StartFrame')
+    const frameRate = numberValue(timeline, 'FrameRate') || 12
+    // EndFrame 是「不含」的結尾（實測 StartFrame=0、EndFrame=20 就是 20 格），
+    // 但 StartFrame 不一定是 0，關鍵影格的 frame 是絕對值，之後要扣掉起點。
+    const startFrame = numberValue(timeline, 'StartFrame')
+    const rawCount = numberValue(timeline, 'EndFrame') - startFrame
+    const frameCount = Math.max(0, Math.min(MAX_FRAMES, rawCount))
     let trackId = numberValue(timeline, 'FirstTrack')
     const visited = new Set<number>()
     while (trackId !== 0) {
-      if (visited.has(trackId)) throw new Error(`Track 鏈結形成循環：${trackId}`)
+      if (visited.has(trackId)) break // 鏈結成環就停下來，已經讀到的照樣可用
       visited.add(trackId)
       const track = queryRows(
         db,
@@ -76,37 +90,53 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
           : ''
       const layer = layers.get(uuid)
       if (!layer) continue
-      const externalId = textValue(track.TrackActionMixer)
-      const packed = chunks.get(externalId)
-      if (!packed) throw new Error(`找不到時間軸外部資料 ${externalId}`)
-      const compressedLength = packed.readUInt32LE(0)
-      if (compressedLength !== packed.length - 4)
-        throw new Error(`時間軸壓縮長度不符：${compressedLength}/${packed.length - 4}`)
-      const root = parseBinc(inflateSync(packed.subarray(4)))
-      const warnings: string[] = []
-      const rateNode = find(root, 'TimeInfo')?.children.find((child) => child.name === 'Rate')
-      let curveRate = typeof rateNode?.value === 'number' ? rateNode.value : 0
-      if (curveRate === 0) {
-        curveRate = frameRate
-        warnings.push('找不到有效的 TimeInfo/Rate，已使用文件 FPS')
-      }
-      const curve = findCurve(root)
-      if (!curve) continue
-      const frames = curve.children.find((child) => child.name === 'Frame')?.value
-      const tags = curve.children.find((child) => child.name === 'Tag')?.value
-      if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
-        throw new Error('ImageCelName FCurve 的 Frame 與 Tag 陣列不完整或長度不符')
-      results.push({
-        animationFolderId: layer.id,
-        animationFolderName: layer.name,
-        frameRate,
-        frameCount,
-        keys: frames.map((frame, index) => ({
-          frame: Math.round((Number(frame) * frameRate) / curveRate),
+      try {
+        const externalId = textValue(track.TrackActionMixer)
+        const packed = chunks.get(externalId)
+        if (!packed) throw new Error(`找不到時間軸外部資料 ${externalId}`)
+        const compressedLength = packed.readUInt32LE(0)
+        if (compressedLength !== packed.length - 4)
+          throw new Error(`時間軸壓縮長度不符：${compressedLength}/${packed.length - 4}`)
+        const root = parseBinc(inflateSync(packed.subarray(4)))
+        const warnings: string[] = []
+        const rateNode = find(root, 'TimeInfo')?.children.find((child) => child.name === 'Rate')
+        let curveRate = typeof rateNode?.value === 'number' ? rateNode.value : 0
+        if (curveRate === 0) {
+          curveRate = frameRate
+          warnings.push('找不到有效的 TimeInfo/Rate，已使用文件 FPS')
+        }
+        const curve = findCurve(root)
+        if (!curve) continue
+        const frames = curve.children.find((child) => child.name === 'Frame')?.value
+        const tags = curve.children.find((child) => child.name === 'Tag')?.value
+        if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
+          throw new Error('ImageCelName FCurve 的 Frame 與 Tag 陣列不完整或長度不符')
+        if (rawCount > MAX_FRAMES)
+          warnings.push(`原始時間軸有 ${rawCount} 格，已截到 ${MAX_FRAMES} 格`)
+        if (frameCount === 0) {
+          warnings.push('這條時間軸的長度是 0，略過')
+          continue
+        }
+        // frame 是相對於整份文件的絕對影格，扣掉 StartFrame 才會對到我們的第 0 格。
+        const keys = frames.map((frame, index) => ({
+          frame: Math.round(((Number(frame) - startFrame) * frameRate) / curveRate),
           celName: String(tags[index]),
-        })),
-        warnings,
-      })
+        }))
+        const outOfRange = keys.filter((key) => key.frame < 0 || key.frame >= frameCount).length
+        if (outOfRange)
+          warnings.push(`有 ${outOfRange} 個關鍵影格落在 1–${frameCount} 格之外，已忽略`)
+        results.push({
+          animationFolderId: layer.id,
+          animationFolderName: layer.name,
+          frameRate,
+          frameCount,
+          keys,
+          warnings,
+        })
+      } catch (error) {
+        // 單一條時間軸讀不動不該讓整個 .clip 開不起來。
+        console.warn(`略過讀不動的 CSP 時間軸（圖層「${layer.name}」）：${String(error)}`)
+      }
     }
   }
   return results

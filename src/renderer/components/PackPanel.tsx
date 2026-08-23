@@ -167,19 +167,22 @@ export function PackPanel(): React.JSX.Element {
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault()
-          if (event.dataTransfer.files.length) {
-            // 別讓全域的「開啟來源檔」處理器搶走這個 drop。
-            event.stopPropagation()
-            void dropImage(index, event.dataTransfer.files)
+          event.stopPropagation()
+          // 一定要先看有沒有我們自己的搬移標記再看 files。
+          // 縮圖是 <img src="data:...">，瀏覽器原生的圖片拖曳會在 dataTransfer 裡
+          // 塞一個叫 download.png 的檔案；先檢查 files 的話，排序就會被誤判成
+          // 「從外部拖了一張 PNG 進來」而變成複製。
+          const from = Number(event.dataTransfer.getData('application/x-pack-index'))
+          if (Number.isFinite(from) && from > 0) {
+            reorder(from, index)
             return
           }
-          const from = Number(event.dataTransfer.getData('application/x-pack-index'))
-          if (from) reorder(from, index)
+          if (event.dataTransfer.files.length) void dropImage(index, event.dataTransfer.files)
         }}
         onClick={() => cell?.editor && void editCell(cell)}
         title={cell?.editor ? '點一下回到這張的編輯畫面' : undefined}
       >
-        {cell && <img src={`data:image/png;base64,${cell.pngBase64}`} />}
+        {cell && <img draggable={false} src={`data:image/png;base64,${cell.pngBase64}`} />}
         <b>{String(index).padStart(2, '0')}</b>
         <small>{cell ? `${cell.width}×${cell.height}` : '空'}</small>
         {cell && cell.frameCount > 1 && <em>▶ {cell.frameCount} 幀</em>}
@@ -269,10 +272,14 @@ export function PackPanel(): React.JSX.Element {
                   onDrop={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
+                    // 編號格搬到 main/tab 沒有意義，只接受真的從外面拖進來的檔案。
+                    if (event.dataTransfer.getData('application/x-pack-index')) return
                     void dropImage(index, event.dataTransfer.files)
                   }}
                 >
-                  {cell && <img src={`data:image/png;base64,${cell.pngBase64}`} />}
+                  {cell && (
+                    <img draggable={false} src={`data:image/png;base64,${cell.pngBase64}`} />
+                  )}
                   <b>{index}</b>
                   <small>
                     {cell

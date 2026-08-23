@@ -30024,6 +30024,7 @@ function findCurve(node2) {
   }
   return void 0;
 }
+var MAX_FRAMES = 240;
 function readCspTimelines(db, chunks) {
   const layers = /* @__PURE__ */ new Map();
   for (const row of queryRows(
@@ -30040,12 +30041,14 @@ function readCspTimelines(db, chunks) {
     db,
     "SELECT FrameRate, StartFrame, EndFrame, FirstTrack FROM TimeLine"
   )) {
-    const frameRate = numberValue2(timeline, "FrameRate");
-    const frameCount = numberValue2(timeline, "EndFrame") - numberValue2(timeline, "StartFrame");
+    const frameRate = numberValue2(timeline, "FrameRate") || 12;
+    const startFrame = numberValue2(timeline, "StartFrame");
+    const rawCount = numberValue2(timeline, "EndFrame") - startFrame;
+    const frameCount = Math.max(0, Math.min(MAX_FRAMES, rawCount));
     let trackId = numberValue2(timeline, "FirstTrack");
     const visited = /* @__PURE__ */ new Set();
     while (trackId !== 0) {
-      if (visited.has(trackId)) throw new Error(`Track \u93C8\u7D50\u5F62\u6210\u5FAA\u74B0\uFF1A${trackId}`);
+      if (visited.has(trackId)) break;
       visited.add(trackId);
       const track = queryRows(
         db,
@@ -30057,37 +30060,51 @@ function readCspTimelines(db, chunks) {
       const uuid = track.LayerUuidWithTrack instanceof Uint8Array ? Buffer.from(track.LayerUuidWithTrack).toString("hex") : "";
       const layer = layers.get(uuid);
       if (!layer) continue;
-      const externalId = textValue(track.TrackActionMixer);
-      const packed = chunks.get(externalId);
-      if (!packed) throw new Error(`\u627E\u4E0D\u5230\u6642\u9593\u8EF8\u5916\u90E8\u8CC7\u6599 ${externalId}`);
-      const compressedLength = packed.readUInt32LE(0);
-      if (compressedLength !== packed.length - 4)
-        throw new Error(`\u6642\u9593\u8EF8\u58D3\u7E2E\u9577\u5EA6\u4E0D\u7B26\uFF1A${compressedLength}/${packed.length - 4}`);
-      const root = parseBinc(inflateSync2(packed.subarray(4)));
-      const warnings = [];
-      const rateNode = find(root, "TimeInfo")?.children.find((child) => child.name === "Rate");
-      let curveRate = typeof rateNode?.value === "number" ? rateNode.value : 0;
-      if (curveRate === 0) {
-        curveRate = frameRate;
-        warnings.push("\u627E\u4E0D\u5230\u6709\u6548\u7684 TimeInfo/Rate\uFF0C\u5DF2\u4F7F\u7528\u6587\u4EF6 FPS");
-      }
-      const curve = findCurve(root);
-      if (!curve) continue;
-      const frames = curve.children.find((child) => child.name === "Frame")?.value;
-      const tags = curve.children.find((child) => child.name === "Tag")?.value;
-      if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
-        throw new Error("ImageCelName FCurve \u7684 Frame \u8207 Tag \u9663\u5217\u4E0D\u5B8C\u6574\u6216\u9577\u5EA6\u4E0D\u7B26");
-      results.push({
-        animationFolderId: layer.id,
-        animationFolderName: layer.name,
-        frameRate,
-        frameCount,
-        keys: frames.map((frame, index) => ({
-          frame: Math.round(Number(frame) * frameRate / curveRate),
+      try {
+        const externalId = textValue(track.TrackActionMixer);
+        const packed = chunks.get(externalId);
+        if (!packed) throw new Error(`\u627E\u4E0D\u5230\u6642\u9593\u8EF8\u5916\u90E8\u8CC7\u6599 ${externalId}`);
+        const compressedLength = packed.readUInt32LE(0);
+        if (compressedLength !== packed.length - 4)
+          throw new Error(`\u6642\u9593\u8EF8\u58D3\u7E2E\u9577\u5EA6\u4E0D\u7B26\uFF1A${compressedLength}/${packed.length - 4}`);
+        const root = parseBinc(inflateSync2(packed.subarray(4)));
+        const warnings = [];
+        const rateNode = find(root, "TimeInfo")?.children.find((child) => child.name === "Rate");
+        let curveRate = typeof rateNode?.value === "number" ? rateNode.value : 0;
+        if (curveRate === 0) {
+          curveRate = frameRate;
+          warnings.push("\u627E\u4E0D\u5230\u6709\u6548\u7684 TimeInfo/Rate\uFF0C\u5DF2\u4F7F\u7528\u6587\u4EF6 FPS");
+        }
+        const curve = findCurve(root);
+        if (!curve) continue;
+        const frames = curve.children.find((child) => child.name === "Frame")?.value;
+        const tags = curve.children.find((child) => child.name === "Tag")?.value;
+        if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
+          throw new Error("ImageCelName FCurve \u7684 Frame \u8207 Tag \u9663\u5217\u4E0D\u5B8C\u6574\u6216\u9577\u5EA6\u4E0D\u7B26");
+        if (rawCount > MAX_FRAMES)
+          warnings.push(`\u539F\u59CB\u6642\u9593\u8EF8\u6709 ${rawCount} \u683C\uFF0C\u5DF2\u622A\u5230 ${MAX_FRAMES} \u683C`);
+        if (frameCount === 0) {
+          warnings.push("\u9019\u689D\u6642\u9593\u8EF8\u7684\u9577\u5EA6\u662F 0\uFF0C\u7565\u904E");
+          continue;
+        }
+        const keys = frames.map((frame, index) => ({
+          frame: Math.round((Number(frame) - startFrame) * frameRate / curveRate),
           celName: String(tags[index])
-        })),
-        warnings
-      });
+        }));
+        const outOfRange = keys.filter((key) => key.frame < 0 || key.frame >= frameCount).length;
+        if (outOfRange)
+          warnings.push(`\u6709 ${outOfRange} \u500B\u95DC\u9375\u5F71\u683C\u843D\u5728 1\u2013${frameCount} \u683C\u4E4B\u5916\uFF0C\u5DF2\u5FFD\u7565`);
+        results.push({
+          animationFolderId: layer.id,
+          animationFolderName: layer.name,
+          frameRate,
+          frameCount,
+          keys,
+          warnings
+        });
+      } catch (error) {
+        console.warn(`\u7565\u904E\u8B80\u4E0D\u52D5\u7684 CSP \u6642\u9593\u8EF8\uFF08\u5716\u5C64\u300C${layer.name}\u300D\uFF09\uFF1A${String(error)}`);
+      }
     }
   }
   return results;

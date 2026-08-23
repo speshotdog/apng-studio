@@ -49,6 +49,8 @@ export function Timeline(): React.JSX.Element {
   /** 插入／刪除影格要動到所有軌道，不然時間軸會對不齊。 */
   const spliceAll = (at: number, remove: number[], insert: number): void => {
     state.commit()
+    const total = tracks[0]?.slots.length ?? 0
+    const target = Math.max(0, Math.min(at, total - remove.length + insert))
     set({
       tracks: tracks.map((t) => {
         const kept = t.slots.filter((_, i) => !remove.includes(i))
@@ -59,6 +61,8 @@ export function Timeline(): React.JSX.Element {
         return { ...t, slots: copy }
       }),
       selection: [],
+      // 插入之後游標停在新的那一格，才能接著把圖層拖進去。
+      ...(insert ? { selectedSlot: target, playhead: target, playing: false } : {}),
     })
   }
 
@@ -329,8 +333,12 @@ export function Timeline(): React.JSX.Element {
           🗑 清空畫布
         </button>
         <span className="divider" />
-        <button className="frame-add" onClick={() => state.resizeFrames(frames + 1)}>
-          ＋ 加一格
+        <button
+          className="frame-add"
+          title="在目前選取的影格右邊插入一格（所有圖層）"
+          onClick={() => spliceAll(selectedSlot + 1, [], 1)}
+        >
+          ＋ 插入一格
         </button>
         <button className="frame-remove" onClick={() => state.resizeFrames(frames - 1)}>
           − 減一格
