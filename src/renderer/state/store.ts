@@ -48,6 +48,7 @@ export interface EditSnapshot {
   exportWidth: number
   exportHeight: number
   visibility: Array<[number, boolean]>
+  trimmed: Record<string, Slot[]>
 }
 
 export interface State {
@@ -133,6 +134,7 @@ function snapshot(state: State): EditSnapshot {
     exportWidth: state.exportWidth,
     exportHeight: state.exportHeight,
     visibility: [...state.visibility],
+    trimmed: state.trimmed,
   }
 }
 

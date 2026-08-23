@@ -165,26 +165,22 @@ const fix = (ids: number[], target: 'sticker' | 'emoji' | 'main' = 'sticker') =>
     target,
     canvasWidth: 360,
     canvasHeight: 360,
-    resolvedIds: ids,
+    frameKeys: ids.map(String),
     fps: 20,
     playCount: 1,
     exportWidth: 360,
     exportHeight: 360,
     format: 'apng',
   })
+/** 把 autofix 回傳的順序換算回圖層 id，方便比對。 */
+const applied = (ids: number[], order: number[]): number[] => order.map((frame) => ids[frame]!)
 const fixedFour = fix([1, 2, 3, 4])
-assert.deepEqual(
-  fixedFour.slots.map(({ layerId }) => layerId),
-  [1, 2, 3, 4, 3, 2],
-)
+assert.deepEqual(applied([1, 2, 3, 4], fixedFour.order), [1, 2, 3, 4, 3, 2])
 assert.deepEqual([fixedFour.exportWidth, fixedFour.exportHeight], [270, 270])
 assert.equal(fixedFour.fps, 6)
 assert.equal(fixedFour.playCount, 4)
 assert.deepEqual(fixedFour.unresolved, [])
-assert.deepEqual(
-  fix([1, 2]).slots.map(({ layerId }) => layerId),
-  [1, 2, 1, 2, 1, 2],
-)
+assert.deepEqual(applied([1, 2], fix([1, 2]).order), [1, 2, 1, 2, 1, 2])
 // 補幀出來的東西必須直接通過 LINE 規格檢查，這是這個功能存在的理由。
 for (const ids of [
   [1, 2],
@@ -194,11 +190,7 @@ for (const ids of [
   [1, 2, 3, 4, 5, 6, 7],
 ]) {
   const fixed = fix(ids)
-  const plan = planFromSlots(
-    fixed.slots.map(({ layerId }) => layerId),
-    fixed.fps,
-    true,
-  )
+  const plan = planFromSlots(applied(ids, fixed.order), fixed.fps, true)
   const seconds = plan.totalDurationMs / 1000
   assert(
     plan.actualFrameCount >= 5 && plan.actualFrameCount <= 20,
@@ -224,11 +216,11 @@ for (const ids of [
   )
 }
 const fixedOne = fix([1])
-assert.equal(fixedOne.slots.length, 1)
+assert.equal(fixedOne.order.length, 1)
 assert(fixedOne.unresolved.some((message) => message.includes('只有一種畫面')))
-assert.equal(fix(Array.from({ length: 20 }, (_, index) => index)).slots.length, 20)
+assert.equal(fix(Array.from({ length: 20 }, (_, index) => index)).order.length, 20)
 const fixedLong = fix(Array.from({ length: 26 }, (_, index) => index))
-assert.equal(fixedLong.slots.length, 20)
+assert.equal(fixedLong.order.length, 20)
 assert(fixedLong.changes.some((change) => change.to.includes('裁切')))
 assert.deepEqual(
   [fix([1, 2, 3, 4, 5], 'emoji').exportWidth, fix([1, 2, 3, 4, 5], 'emoji').exportHeight],
@@ -336,14 +328,14 @@ const twitchFix = autoFixForLine({
   target: 'twitchEmoteAnimated',
   canvasWidth: 360,
   canvasHeight: 360,
-  resolvedIds: Array.from({ length: 72 }, (_, layerId) => layerId),
+  frameKeys: Array.from({ length: 72 }, (_, index) => String(index)),
   fps: 60,
   playCount: 0,
   exportWidth: 112,
   exportHeight: 112,
   format: 'gif',
 })
-assert.deepEqual([twitchFix.slots.length, twitchFix.fps], [60, 30])
+assert.deepEqual([twitchFix.order.length, twitchFix.fps], [60, 30])
 
 const fakeGif = new Uint8Array([71, 73, 70])
 let calls = 0

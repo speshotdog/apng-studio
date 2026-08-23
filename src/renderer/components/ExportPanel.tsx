@@ -227,7 +227,7 @@ export function ExportPanel(props: {
         target: lineTarget,
         canvasWidth: doc.canvas.width,
         canvasHeight: doc.canvas.height,
-        resolvedIds,
+        frameKeys: compositeKeys,
         fps,
         playCount,
         exportWidth: width,
@@ -242,18 +242,12 @@ export function ExportPanel(props: {
     if (!confirm(`將套用以下調整：\n\n${[...lines, ...unresolved].join('\n')}`)) return
     await saveCurrentSnapshot(`一鍵符合規範前_${timestampName()}`)
     state.commit()
+    // 補幀後的順序要同時套到每一條軌道，多軌的動作才不會被拆散。
     set({
-      tracks: tracks.map((item, index) =>
-        index === activeTrack
-          ? { ...item, slots: autofix.slots }
-          : {
-              ...item,
-              slots: Array.from(
-                { length: autofix.slots.length },
-                (_, i) => item.slots[i] ?? { layerId: null },
-              ),
-            },
-      ),
+      tracks: tracks.map((item, trackIndex) => ({
+        ...item,
+        slots: autofix.order.map((frame) => ({ layerId: state.resolveSlot(frame, trackIndex) })),
+      })),
       fps: autofix.fps,
       playCount: autofix.playCount,
       exportWidth: autofix.exportWidth,
