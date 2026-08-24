@@ -4,7 +4,10 @@ import { access, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
-const exe = join(root, 'release', 'APNG-Studio-0.1.0-portable.exe')
+// 版本要跟著 package.json 走。原本寫死 0.1.0，release/ 裡剛好一直留著那支舊 exe，
+// 所以每次發版其實都在煙霧測試 v0.1.0 的執行檔，測不到當次打包的結果。
+const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+const exe = join(root, 'release', `APNG-Studio-${version}-portable.exe`)
 const output = join(root, 'out', 'smoke')
 const clip = join(root, 'assets', 'samples', '11.clip')
 await access(exe)
