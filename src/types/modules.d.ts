@@ -37,7 +37,9 @@ declare module 'gifenc' {
       width: number,
       height: number,
       options: {
-        palette: Palette
+        // 第一幀一定要給 palette（會寫成 Global Color Table）；
+        // 之後的幀省略就會沿用 GCT，不再寫一份一模一樣的 Local Color Table。
+        palette?: Palette
         delay?: number
         repeat?: number
         transparent?: boolean
