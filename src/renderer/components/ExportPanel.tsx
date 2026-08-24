@@ -4,6 +4,7 @@ import { encodeGif } from '../../codec/gif.js'
 import type { ExportResult, GiphyUploadResult, PublicSettings } from '../../preload/api.js'
 import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
+import { mergeAdjacentIdenticalFrames } from '../../codec/timing.js'
 import { useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
 import { askConfirm } from '../prompt.js'
@@ -253,7 +254,10 @@ export function ExportPanel(props: {
     setGiphyResult(null)
     try {
       const payload = await createExportPayload()
-      const encoded = encodeGif(payload.frames, payload.width, payload.height, {
+      const frames = payload.mergeIdentical
+        ? mergeAdjacentIdenticalFrames(payload.frames)
+        : payload.frames
+      const encoded = encodeGif(frames, payload.width, payload.height, {
         numPlays: payload.numPlays,
         maxColors: payload.gif?.maxColors ?? 256,
       })

@@ -9,7 +9,7 @@ import {
 } from './compose.js'
 import { useStore } from './state/store.js'
 import { EXPORT_TARGETS } from '../codec/line.js'
-import { frameDelays } from '../codec/timing.js'
+import { frameDelays, mergeAdjacentIdenticalFrames } from '../codec/timing.js'
 import { captureEditorDocument } from './snapshot.js'
 
 export type ExportDocumentSnapshot = DocumentComposeSnapshot
@@ -58,15 +58,7 @@ export async function createExportPayloadFromSnapshot(
     delayMs: delays[position]!,
   }))
   if (document.format === 'gif' && document.mergeIdentical) {
-    frames = frames.reduce<typeof frames>((merged, frame) => {
-      const previous = merged[merged.length - 1]
-      const identical =
-        previous?.rgba.length === frame.rgba.length &&
-        previous.rgba.every((value, index) => value === frame.rgba[index])
-      if (previous && identical) previous.delayMs += frame.delayMs
-      else merged.push(frame)
-      return merged
-    }, [])
+    frames = mergeAdjacentIdenticalFrames(frames)
   }
   return {
     format: document.format,

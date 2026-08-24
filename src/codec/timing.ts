@@ -12,6 +12,33 @@
  */
 export const STEP_MS = 10
 
+export interface TimedRgbaFrame {
+  rgba: Uint8Array
+  delayMs: number
+}
+
+function equalRgba(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  for (let index = 0; index < a.length; index++) {
+    if (a[index] !== b[index]) return false
+  }
+  return true
+}
+
+/** 合併相鄰且像素完全相同的影格，並把延遲累加到保留的影格。 */
+export function mergeAdjacentIdenticalFrames<T extends TimedRgbaFrame>(frames: readonly T[]): T[] {
+  const merged: T[] = []
+  for (const frame of frames) {
+    const previous = merged[merged.length - 1]
+    if (previous && equalRgba(previous.rgba, frame.rgba)) {
+      merged[merged.length - 1] = { ...previous, delayMs: previous.delayMs + frame.delayMs }
+    } else {
+      merged.push({ ...frame })
+    }
+  }
+  return merged
+}
+
 /** 把 totalMs 分給 count 幀，每幀都是 STEP_MS 的整數倍，總和精確等於 totalMs。 */
 export function distributeDelays(totalMs: number, count: number): number[] {
   if (!Number.isInteger(count) || count <= 0) throw new Error('影格數必須是正整數')

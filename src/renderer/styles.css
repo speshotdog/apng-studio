@@ -19,6 +19,7 @@ body {
 }
 button,
 input,
+textarea,
 select {
   font: inherit;
   color: inherit;
@@ -776,7 +777,8 @@ header p {
   margin-left: auto;
   color: var(--muted);
 }
-input[type='number'],
+input,
+textarea,
 select {
   background: #161715;
   border: 1px solid #444740;

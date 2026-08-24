@@ -8,7 +8,7 @@ import { newTrack, runtimeDocument, useStore } from '../src/renderer/state/store
 import type { EditorDocument } from '../src/project/types.js'
 import { autoFixForLine } from '../src/codec/autofix.js'
 import { uploadToGiphy } from '../src/main/giphy.js'
-import { distributeDelays, frameDelays } from '../src/codec/timing.js'
+import { distributeDelays, frameDelays, mergeAdjacentIdenticalFrames } from '../src/codec/timing.js'
 
 // —— 影格延遲：LINE 會把 fcTL 加總後要求剛好 1/2/3/4 秒 ——
 // 每一格都必須是 10 毫秒的整數倍，總和必須精確，否則 LINE 會回
@@ -58,6 +58,11 @@ const colors = [
   [128, 0, 255],
 ]
 const frames: ApngFrame[] = colors.map(([r, g, b]) => ({ rgba: solid(r!, g!, b!), delayMs: 50 }))
+
+const mergedAdjacentFrames = mergeAdjacentIdenticalFrames(frames)
+assert.equal(mergedAdjacentFrames.length, 6)
+assert.equal(mergedAdjacentFrames[2]!.delayMs, 150)
+assert.equal(frames[2]!.delayMs, 50, '合併不得修改原始影格')
 
 const mergedPlan = planApng(frames, { numPlays: 4, mergeIdentical: true })
 assert.equal(mergedPlan.actualFrameCount, 6)
