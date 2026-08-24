@@ -26,7 +26,7 @@ import type {
   PackImportCell,
   PackImportResult,
   ProjectBlob,
-  ProjectSnapshot,
+  ProjectPackCell,
 } from '../project/types.js'
 import type { ExportTarget } from '../codec/line.js'
 import {
@@ -109,11 +109,25 @@ async function importPackFolder(requested?: string): Promise<PackImportResult | 
   return { cells, skipped }
 }
 
-async function hydratePackCells(
-  cells: NonNullable<ProjectSnapshot['pack']>['cells'],
-): Promise<PackImportCell[]> {
+async function hydratePackCells(cells: ProjectPackCell[]): Promise<PackImportCell[]> {
   const hydrated: PackImportCell[] = []
   for (const cell of cells) {
+    if (cell.kind === 'document') {
+      if (!cell.encoded) continue
+      hydrated.push({
+        index: cell.index,
+        sourcePath: '',
+        pngBase64: cell.encoded.base64,
+        width: cell.encoded.width,
+        height: cell.encoded.height,
+        byteLength: cell.encoded.byteLength,
+        frameCount: cell.encoded.frameCount,
+        documentId: cell.documentId,
+        renderedRevision: cell.encoded.renderedRevision,
+        mime: cell.encoded.mime,
+      })
+      continue
+    }
     let bytes: Uint8Array
     try {
       bytes = cell.sourcePath
@@ -125,7 +139,7 @@ async function hydratePackCells(
     }
     try {
       hydrated.push({
-        ...cell,
+        index: cell.index,
         pngBase64: Buffer.from(bytes).toString('base64'),
         byteLength: bytes.length,
         ...pngInfo(bytes),
@@ -440,9 +454,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('project:importFolder', (_event, requested?: string) =>
     importPackFolder(requested),
   )
-  ipcMain.handle(
-    'project:hydratePackCells',
-    (_event, cells: NonNullable<ProjectSnapshot['pack']>['cells']) => hydratePackCells(cells),
+  ipcMain.handle('project:hydratePackCells', (_event, cells: ProjectPackCell[]) =>
+    hydratePackCells(cells),
   )
   ipcMain.handle(
     'project:exportPack',

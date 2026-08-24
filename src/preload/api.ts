@@ -4,7 +4,7 @@ import type {
   ProjectBlob,
   ProjectListItem,
   ProjectMeta,
-  ProjectSnapshot,
+  ProjectPackCell,
 } from '../project/types.js'
 export interface LayerNode {
   id: number
@@ -127,9 +127,7 @@ export interface Api {
   renameProject(id: string, name: string): Promise<ProjectMeta[]>
   duplicateProject(id: string, name: string): Promise<ProjectMeta>
   importPackFolder(path?: string): Promise<PackImportResult | null>
-  hydratePackCells(
-    cells: NonNullable<ProjectSnapshot['pack']>['cells'],
-  ): Promise<PackImportResult['cells']>
+  hydratePackCells(cells: ProjectPackCell[]): Promise<PackImportResult['cells']>
   exportPack(
     filePath: string | undefined,
     cells: PackImportResult['cells'],

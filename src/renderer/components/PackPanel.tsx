@@ -3,7 +3,6 @@ import { EXPORT_TARGETS, type ExportTarget } from '../../codec/line.js'
 import type { PackImportCell } from '../../project/types.js'
 import { packImportMessage } from '../packMessage.js'
 import { askConfirm } from '../prompt.js'
-import { applyEditorState, captureEditorState } from '../snapshot.js'
 import { useStore } from '../state/store.js'
 
 function errorFor(
@@ -101,39 +100,8 @@ export function PackPanel(): React.JSX.Element {
 
   /** 點一格有編輯狀態的貼圖 → 回到單張動畫頁繼續改。 */
   const editCell = async (cell: PackImportCell): Promise<void> => {
-    if (!cell.editor) return
-    // 剛按完「存入貼圖組」時 dirty 一定是 true，但要載入的就是同一份狀態，
-    // 這時候再跳一次「會覆蓋進度」只是擋路，所以先比對過再決定要不要問。
-    const same = JSON.stringify(captureEditorState()) === JSON.stringify(cell.editor.state)
-    if (
-      state.dirty &&
-      !same &&
-      !(await askConfirm(
-        '回到這張的編輯畫面',
-        '目前動畫頁上還沒儲存的調整會被覆蓋，繼續嗎？',
-        '繼續',
-      ))
-    )
-      return
-    const source = cell.editor.sourceId ? state.sourceOf(cell.editor.sourceId) : undefined
-    const legacyPath = cell.editor.clipPath
-    const sameFile =
-      (source && state.activeSourceId === source.id) ||
-      (legacyPath && state.doc?.filePath === legacyPath)
-    if (!sameFile) {
-      const doc = source
-        ? state.docs[source.id]
-        : legacyPath
-          ? await window.api.openClip(legacyPath).catch(() => null)
-          : null
-      if (!doc) {
-        state.toast('error', `找不到來源：${cell.editor.clipName ?? cell.editor.sourceId ?? ''}`)
-        return
-      }
-      if (source) useStore.getState().setActiveSource(source.id)
-      else useStore.getState().open(doc)
-    }
-    applyEditorState(cell.editor.state)
+    if (!cell.documentId || !state.documents[cell.documentId]) return
+    state.switchDocument(cell.documentId)
     state.set({ mode: 'animation' })
     state.toast('info', `已回到第 ${cell.index} 格的編輯狀態`)
   }
@@ -167,7 +135,7 @@ export function PackPanel(): React.JSX.Element {
     const error = errorFor(cell, index, state.packTarget)
     return (
       <article
-        className={`pack-cell ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''} ${cell?.editor ? 'editable' : ''}`}
+        className={`pack-cell ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''} ${cell?.documentId ? 'editable' : ''}`}
         key={index}
         draggable={Boolean(cell)}
         onDragStart={(event) =>
@@ -188,14 +156,14 @@ export function PackPanel(): React.JSX.Element {
           }
           if (event.dataTransfer.files.length) void dropImage(index, event.dataTransfer.files)
         }}
-        onClick={() => cell?.editor && void editCell(cell)}
-        title={cell?.editor ? '點一下回到這張的編輯畫面' : undefined}
+        onClick={() => cell?.documentId && void editCell(cell)}
+        title={cell?.documentId ? '點一下回到這張的編輯畫面' : undefined}
       >
         {cell && <img draggable={false} src={`data:image/png;base64,${cell.pngBase64}`} />}
         <b>{String(index).padStart(2, '0')}</b>
         <small>{cell ? `${cell.width}×${cell.height}` : '空'}</small>
         {cell && cell.frameCount > 1 && <em>▶ {cell.frameCount} 幀</em>}
-        {cell?.editor && <i className="editable-badge">可編輯</i>}
+        {cell?.documentId && <i className="editable-badge">可編輯</i>}
         {error && error !== '尚未匯入' && <span>{error}</span>}
       </article>
     )

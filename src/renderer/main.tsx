@@ -37,7 +37,13 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
         sourceName: doc.filePath.split(/[\/]/).at(-1) ?? '',
         state: captureBlob(),
       })
-      useStore.getState().set({ project: meta, screen: 'editor', dirty: false })
+      const current = useStore.getState()
+      useStore.setState({
+        project: meta,
+        screen: 'editor',
+        savedRevision: current.projectRevision,
+        dirty: false,
+      })
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       )

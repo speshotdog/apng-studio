@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'node:path'
 import type { ProjectBlob, ProjectListItem, ProjectMeta } from '../project/types.js'
+import { normalizeProjectBlob } from '../project/migration.js'
 import { ProjectStore } from './project-store.js'
 
 let store: ProjectStore | null = null
@@ -32,7 +33,12 @@ export async function listProjects(): Promise<ProjectListItem[]> {
 
 export async function readProject(id: string): Promise<ProjectBlob | null> {
   const record = await projects().read(id)
-  return record ? (record.state as ProjectBlob) : null
+  return record
+    ? normalizeProjectBlob(record.state, undefined, {
+        path: record.meta.sourcePath,
+        name: record.meta.sourceName,
+      })
+    : null
 }
 
 export async function createProject(input: {
@@ -61,7 +67,16 @@ export async function readProjectAutosave(
   id: string,
 ): Promise<{ state: ProjectBlob; savedAt: string } | null> {
   const found = await projects().readAutosave(id)
-  return found ? { state: found.state as ProjectBlob, savedAt: found.savedAt } : null
+  if (!found) return null
+  const project = await projects().read(id)
+  return {
+    state: normalizeProjectBlob(
+      found.state,
+      undefined,
+      project?.meta ? { path: project.meta.sourcePath, name: project.meta.sourceName } : undefined,
+    ),
+    savedAt: found.savedAt,
+  }
 }
 
 export async function discardProjectAutosave(id: string): Promise<void> {

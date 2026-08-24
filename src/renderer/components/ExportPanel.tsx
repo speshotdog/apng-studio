@@ -2,12 +2,12 @@ import { useMemo, useState } from 'react'
 import { EXPORT_TARGETS, validateForLine, type ExportTarget } from '../../codec/line.js'
 import { encodeGif } from '../../codec/gif.js'
 import type { ExportResult, GiphyUploadResult, PublicSettings } from '../../preload/api.js'
+import { createEntityId } from '../../project/id.js'
 import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
-import { useStore, type TargetSettings } from '../state/store.js'
+import { captureDocumentState, useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
 import { askConfirm } from '../prompt.js'
-import { captureEditorState } from '../snapshot.js'
 import { saveCurrentProject } from '../project.js'
 import { TagEditor } from './TagEditor.js'
 
@@ -204,17 +204,24 @@ export function ExportPanel(props: {
         toast('error', `貼圖組 ${state.packCount} 格已滿，請先調整張數或清掉一格`)
         return
       }
+      const current = useStore.getState()
+      const documentId = createEntityId()
+      const document = {
+        ...captureDocumentState(current),
+        past: [],
+        future: [],
+      }
       set({
+        documents: { ...current.documents, [documentId]: document },
         packCells: [
-          ...state.packCells,
+          ...current.packCells,
           {
             index: slot,
             sourcePath: '',
             ...encoded,
-            editor: {
-              sourceId: state.activeSourceId ?? undefined,
-              state: captureEditorState(),
-            },
+            documentId,
+            renderedRevision: document.contentRevision,
+            mime: 'image/png',
           },
         ],
       })

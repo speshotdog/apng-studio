@@ -21,12 +21,33 @@ export function SourcePanel({ onAdd }: { onAdd: () => void }): React.JSX.Element
   const usage = (
     sourceId: string,
   ): { frames: number; packCells: Array<number | 'main' | 'tab'> } => {
-    const frames = state.tracks.reduce(
+    const activeFrames = state.tracks.reduce(
       (count, track) => count + track.slots.filter((slot) => slot.sourceId === sourceId).length,
       0,
     )
+    const frames = Object.entries(state.documents).reduce(
+      (count, [documentId, document]) =>
+        documentId === state.activeDocumentId
+          ? count
+          : count +
+            document.tracks.reduce(
+              (sum, track) => sum + track.slots.filter((slot) => slot.sourceId === sourceId).length,
+              0,
+            ),
+      activeFrames,
+    )
     const packCells = state.packCells
-      .filter((cell) => cell.editor?.sourceId === sourceId)
+      .filter((cell) => {
+        if (!cell.documentId) return false
+        const document =
+          cell.documentId === state.activeDocumentId
+            ? { tracks: state.tracks, activeSourceId: state.activeSourceId ?? undefined }
+            : state.documents[cell.documentId]
+        return (
+          document?.activeSourceId === sourceId ||
+          document?.tracks.some((track) => track.slots.some((slot) => slot.sourceId === sourceId))
+        )
+      })
       .map((cell) => cell.index)
     return { frames, packCells }
   }

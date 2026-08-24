@@ -18,17 +18,16 @@ export interface StoredTrack {
   slots: { sourceId?: string | null; layerId: number | null }[]
 }
 
+/** v0.1～v1 的編輯器快照。只供舊檔升級，v2 不再於文件內複製 sources。 */
 export interface EditorState {
   sources?: SourceAsset[]
   activeSourceId?: string
-  /** v0.2 起用軌道；舊檔沒有這欄，讀取時由 slots + zoom/offset 轉出來。 */
   tracks?: StoredTrack[]
-  /** v0.1 舊檔的單軌影格。 */
   slots?: { sourceId?: string | null; layerId: number | null }[]
   zoom?: number
   offsetX?: number
   offsetY?: number
-  visibility: Array<[string, boolean]>
+  visibility: Array<[string | number, boolean]>
   fps: number
   playCount: number
   format: 'apng' | 'gif' | 'png'
@@ -42,6 +41,57 @@ export interface EditorState {
   gifColors?: number
 }
 
+/** v2 的可編輯文件；素材只以 sourceId 引用專案層 sources。 */
+export interface EditorDocument {
+  tracks: StoredTrack[]
+  visibility: Array<[string, boolean]>
+  fps: number
+  playCount: number
+  format: 'apng' | 'gif' | 'png'
+  lineTarget: ExportTarget
+  exportWidth: number
+  exportHeight: number
+  lockAspect: boolean
+  scaleMode: 'smooth' | 'pixel'
+  mergeIdentical: boolean
+  staticFrame: number
+  gifColors: number
+  activeSourceId?: string
+  contentRevision: number
+}
+
+export interface EncodedDocumentCache {
+  base64: string
+  mime: string
+  width: number
+  height: number
+  byteLength: number
+  frameCount: number
+  renderedRevision: number
+}
+
+export type PackCellIndex = number | 'main' | 'tab'
+
+export interface ExternalImagePackCell {
+  kind: 'external'
+  index: PackCellIndex
+  sourcePath?: string
+  pngBase64?: string
+  width?: number
+  height?: number
+  byteLength?: number
+  frameCount?: number
+}
+
+export interface DocumentPackCell {
+  kind: 'document'
+  index: PackCellIndex
+  documentId: string
+  encoded?: EncodedDocumentCache
+}
+
+export type ProjectPackCell = ExternalImagePackCell | DocumentPackCell
+
 /** 專案清單用的輕量資訊，不含狀態本體。 */
 export interface ProjectMeta {
   id: string
@@ -50,32 +100,28 @@ export interface ProjectMeta {
   updatedAt: string
   sourcePath: string
   sourceName: string
-  /** 有沒有比正式存檔更新的自動存檔 */
   hasAutosave: boolean
   autosaveAt: string | null
 }
 
-/** 專案清單項目（附縮圖 data URL）。 */
 export interface ProjectListItem extends ProjectMeta {
   thumbnail: string | null
 }
 
-/** 一個專案完整存下來的東西。 */
+/** v2 專案檔。所有新存檔只允許寫這個格式。 */
 export interface ProjectBlob {
-  state: EditorState
+  version: 2
+  sources: SourceAsset[]
+  editorDocuments: Record<string, EditorDocument>
+  standaloneDocumentId: string
   pack?: {
     target: ExportTarget
     count: number
-    cells: Array<{
-      index: number | 'main' | 'tab'
-      sourcePath?: string
-      pngBase64?: string
-      editor?: PackCellEditor
-    }>
+    cells: ProjectPackCell[]
   }
 }
 
-/** v0.1／v0.2 的舊存檔格式，只在匯入時用得到。 */
+/** v0.1／v0.2 的舊存檔格式，只在匯入與正規化時用得到。 */
 export interface ProjectSnapshot {
   id: string
   name: string
@@ -85,19 +131,9 @@ export interface ProjectSnapshot {
   clipName: string
   thumbnail: string
   state: EditorState
-  pack?: {
-    target: ExportTarget
-    count: number
-    cells: Array<{
-      index: number | 'main' | 'tab'
-      sourcePath?: string
-      pngBase64?: string
-      editor?: PackCellEditor
-    }>
-  }
+  pack?: LegacyPack
 }
 
-/** 從「單張動畫」存進貼圖組時一併帶著的編輯狀態，讓使用者能點回去繼續改。 */
 export interface PackCellEditor {
   sourceId?: string
   clipPath?: string
@@ -105,15 +141,35 @@ export interface PackCellEditor {
   state: EditorState
 }
 
+export interface LegacyPackCell {
+  index: PackCellIndex
+  sourcePath?: string
+  pngBase64?: string
+  width?: number
+  height?: number
+  byteLength?: number
+  frameCount?: number
+  editor?: PackCellEditor
+}
+
+export interface LegacyPack {
+  target: ExportTarget
+  count: number
+  cells: LegacyPackCell[]
+}
+
+/** renderer 中已解碼、可直接顯示或匯出的格子。 */
 export interface PackImportCell {
-  index: number | 'main' | 'tab'
+  index: PackCellIndex
   sourcePath: string
   pngBase64: string
   width: number
   height: number
   byteLength: number
   frameCount: number
-  editor?: PackCellEditor
+  documentId?: string
+  renderedRevision?: number
+  mime?: string
 }
 
 export interface PackImportResult {

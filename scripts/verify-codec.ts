@@ -4,7 +4,8 @@ import { encodeApng, planApng, verifyApng, type ApngFrame } from '../src/codec/a
 import { encodeGif } from '../src/codec/gif.js'
 import { EXPORT_TARGETS, validateForLine } from '../src/codec/line.js'
 import { planFromSlots } from '../src/renderer/plan.js'
-import { newTrack, useStore } from '../src/renderer/state/store.js'
+import { newTrack, runtimeDocument, useStore } from '../src/renderer/state/store.js'
+import type { EditorDocument } from '../src/project/types.js'
 import { autoFixForLine } from '../src/codec/autofix.js'
 import { uploadToGiphy } from '../src/main/giphy.js'
 import { distributeDelays, frameDelays } from '../src/codec/timing.js'
@@ -101,6 +102,60 @@ assert.deepEqual(
 )
 useStore.getState().undo()
 assert.equal(useStore.getState().tracks[0]!.slots.length, 2)
+
+// 每份文件有獨立工作副本與歷史；切換本身不應新增 revision 或污染另一份。
+const editorDocument = (id: string, fps: number): EditorDocument => ({
+  tracks: [{ ...newTrack(id, 1), id }],
+  visibility: [],
+  fps,
+  playCount: 1,
+  format: 'apng',
+  lineTarget: 'sticker',
+  exportWidth: 270,
+  exportHeight: 270,
+  lockAspect: true,
+  scaleMode: 'smooth',
+  mergeIdentical: true,
+  staticFrame: 0,
+  gifColors: 256,
+  activeSourceId: sourceId,
+  contentRevision: 0,
+})
+const documentA = runtimeDocument(editorDocument('document-a', 12))
+const documentB = runtimeDocument(editorDocument('document-b', 24))
+useStore.setState({
+  documents: { a: documentA, b: documentB },
+  activeDocumentId: 'a',
+  standaloneDocumentId: 'a',
+  tracks: documentA.tracks,
+  visibility: new Map(),
+  fps: documentA.fps,
+  past: [],
+  future: [],
+  contentRevision: 0,
+  projectRevision: 0,
+  savedRevision: 0,
+  dirty: false,
+})
+useStore.getState().commit()
+useStore.getState().set({ fps: 13 })
+assert.equal(useStore.getState().projectRevision, 1)
+useStore.getState().switchDocument('b')
+assert.equal(useStore.getState().fps, 24)
+assert.equal(useStore.getState().past.length, 0)
+assert.equal(useStore.getState().projectRevision, 1, '切換文件不能算語意編輯')
+useStore.getState().commit()
+useStore.getState().set({ fps: 25 })
+useStore.getState().switchDocument('a')
+assert.equal(useStore.getState().fps, 13)
+assert.equal(useStore.getState().past.length, 1)
+useStore.getState().undo()
+assert.equal(useStore.getState().fps, 12)
+assert.equal(useStore.getState().contentRevision, 2, 'undo 也要遞增 contentRevision')
+useStore.getState().switchDocument('b')
+assert.equal(useStore.getState().fps, 25)
+useStore.getState().undo()
+assert.equal(useStore.getState().fps, 24)
 
 const merged = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: true })
 const noMerge = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: false })

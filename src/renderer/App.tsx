@@ -14,6 +14,7 @@ import { TextPrompt } from './components/TextPrompt.js'
 import { DraftBrowser } from './components/DraftBrowser.js'
 import { createProjectFrom, guardUnsaved, saveCurrentProject } from './project.js'
 import type { MenuCommand, PublicSettings } from '../preload/api.js'
+import { createEntityId } from '../project/id.js'
 
 const OPENABLE = /\.(clip|procreate|psd|psb)$/i
 
@@ -30,7 +31,7 @@ export function App(): React.JSX.Element {
       const doc = await window.api.openClip(path)
       if (!doc) return
       const name = doc.filePath.split(/[\\/]/).at(-1) ?? doc.filePath
-      store.addSource({ id: crypto.randomUUID(), path: doc.filePath, name }, doc)
+      store.addSource({ id: createEntityId(), path: doc.filePath, name }, doc)
       toast('info', `已加入來源：${name}`)
     } catch (error) {
       toast('error', error instanceof Error ? error.message : String(error))

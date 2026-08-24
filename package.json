@@ -15,6 +15,7 @@
     "verify": "tsx scripts/verify-clip.ts",
     "verify:codec": "tsx scripts/verify-codec.ts",
     "verify:timeline": "tsx scripts/verify-timeline.ts",
+    "verify:migration": "tsx scripts/verify-migration.ts",
     "verify:formats": "tsx scripts/verify-formats.ts",
     "verify:giphy": "tsx scripts/verify-giphy.ts",
     "try:giphy": "node scripts/build-smoke.mjs && electron scripts/try-giphy.js",

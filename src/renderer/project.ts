@@ -1,25 +1,50 @@
 import type { ClipSummary } from '../preload/api.js'
-import type { EditorState, ProjectBlob, ProjectMeta, SourceAsset } from '../project/types.js'
+import type { ProjectBlob, ProjectMeta, ProjectPackCell, SourceAsset } from '../project/types.js'
 import { askConfirm, askText } from './prompt.js'
-import { applyEditorState, captureEditorState } from './snapshot.js'
-import { useStore } from './state/store.js'
+import { captureEditorDocuments } from './snapshot.js'
+import { runtimeDocument, useStore } from './state/store.js'
 
 /** 自動存檔間隔。夠短到當機不會痛，又不會一直在寫磁碟。 */
 export const AUTOSAVE_INTERVAL_MS = 30_000
 
 export function captureBlob(): ProjectBlob {
   const state = useStore.getState()
+  const cells: ProjectPackCell[] = state.packCells.map((cell) =>
+    cell.documentId
+      ? {
+          kind: 'document',
+          index: cell.index,
+          documentId: cell.documentId,
+          encoded: {
+            base64: cell.pngBase64,
+            mime: cell.mime ?? 'image/png',
+            width: cell.width,
+            height: cell.height,
+            byteLength: cell.byteLength,
+            frameCount: cell.frameCount,
+            renderedRevision: cell.renderedRevision ?? 0,
+          },
+        }
+      : {
+          kind: 'external',
+          index: cell.index,
+          sourcePath: cell.sourcePath,
+          pngBase64: cell.pngBase64,
+          width: cell.width,
+          height: cell.height,
+          byteLength: cell.byteLength,
+          frameCount: cell.frameCount,
+        },
+  )
   return {
-    state: captureEditorState(),
+    version: 2,
+    sources: state.sources,
+    editorDocuments: captureEditorDocuments(),
+    standaloneDocumentId: state.standaloneDocumentId,
     pack: {
       target: state.packTarget,
       count: state.packCount,
-      cells: state.packCells.map(({ index, sourcePath, pngBase64, editor }) => ({
-        index,
-        sourcePath,
-        pngBase64,
-        editor,
-      })),
+      cells,
     },
   }
 }
@@ -37,7 +62,7 @@ function legacySource(meta: ProjectMeta): SourceAsset {
 }
 
 async function loadSourcesForState(
-  stored: EditorState,
+  requestedSources: SourceAsset[],
   meta: ProjectMeta,
 ): Promise<{
   sources: SourceAsset[]
@@ -45,11 +70,11 @@ async function loadSourcesForState(
   changed: boolean
   missing: string[]
 }> {
-  const requested = stored.sources?.length ? stored.sources : [legacySource(meta)]
+  const requested = requestedSources.length ? requestedSources : [legacySource(meta)]
   const docs: Record<string, ClipSummary> = {}
   const sources: SourceAsset[] = []
   const missing: string[] = []
-  const changed = !stored.sources?.length
+  const changed = !requestedSources.length
   for (const source of requested) {
     const doc = await window.api.openClip(source.path).catch(() => null)
     sources.push(source)
@@ -68,12 +93,55 @@ function thumbnail(): string | undefined {
 
 /** 套用一份專案內容到編輯器（呼叫端要先把來源檔開好）。 */
 export async function applyBlob(blob: ProjectBlob): Promise<void> {
-  applyEditorState(blob.state)
   const packCells = blob.pack ? await window.api.hydratePackCells(blob.pack.cells) : []
-  useStore.getState().set({
+  const current = useStore.getState()
+  const sources = blob.sources.length ? blob.sources : current.sources
+  const documents = Object.fromEntries(
+    Object.entries(blob.editorDocuments).map(([id, document]) => [id, runtimeDocument(document)]),
+  )
+  const activeDocumentId = documents[blob.standaloneDocumentId]
+    ? blob.standaloneDocumentId
+    : (Object.keys(documents)[0] ?? '')
+  const document = documents[activeDocumentId]
+  if (!document) throw new Error('專案沒有可用的編輯文件')
+  const activeSourceId =
+    document.activeSourceId && current.docs[document.activeSourceId]
+      ? document.activeSourceId
+      : (sources.find((source) => current.docs[source.id])?.id ?? document.activeSourceId ?? null)
+  useStore.setState({
+    sources,
+    documents,
+    activeDocumentId,
+    standaloneDocumentId: activeDocumentId,
+    tracks: document.tracks,
+    visibility: new Map(document.visibility),
+    fps: document.fps,
+    playCount: document.playCount,
+    format: document.format,
+    lineTarget: document.lineTarget,
+    exportWidth: document.exportWidth,
+    exportHeight: document.exportHeight,
+    lockAspect: document.lockAspect,
+    scaleMode: document.scaleMode,
+    mergeIdentical: document.mergeIdentical,
+    staticFrame: document.staticFrame,
+    gifColors: document.gifColors,
+    activeSourceId,
+    doc: activeSourceId ? (current.docs[activeSourceId] ?? null) : null,
+    contentRevision: document.contentRevision,
+    activeTrack: document.activeTrack,
+    trimmed: document.trimmed,
+    past: document.past,
+    future: document.future,
+    selection: [],
+    selectedSlot: 0,
+    playhead: 0,
+    playing: false,
     packTarget: blob.pack?.target ?? 'staticSticker',
     packCount: blob.pack?.count ?? 32,
     packCells,
+    projectRevision: 0,
+    savedRevision: 0,
     dirty: false,
   })
 }
@@ -83,11 +151,17 @@ export async function saveCurrentProject(): Promise<boolean> {
   const state = useStore.getState()
   if (!state.project) return false
   const savingId = state.project.id
+  const savingRevision = state.projectRevision
   try {
     const meta = await window.api.saveProject(savingId, captureBlob(), thumbnail())
     // 存檔期間使用者可能已經切到別的專案；慢一步回來的結果不可以蓋掉現在這一份。
     if (useStore.getState().project?.id !== savingId) return true
-    useStore.getState().set({ project: meta, dirty: false })
+    const current = useStore.getState()
+    useStore.setState({
+      project: meta,
+      savedRevision: savingRevision,
+      dirty: current.projectRevision !== savingRevision,
+    })
     state.toast('success', `已儲存「${meta.name}」`)
     return true
   } catch (error) {
@@ -111,7 +185,8 @@ export async function saveAsNewProject(): Promise<ProjectMeta | null> {
       state: captureBlob(),
       thumbnailDataUrl: thumbnail(),
     })
-    useStore.getState().set({ project: meta, dirty: false })
+    const current = useStore.getState()
+    useStore.setState({ project: meta, savedRevision: current.projectRevision, dirty: false })
     state.toast('success', `已另存為「${meta.name}」`)
     return meta
   } catch (error) {
@@ -159,16 +234,18 @@ export async function openProject(meta: ProjectMeta): Promise<boolean> {
       else await window.api.discardProjectAutosave(meta.id)
     }
   }
-  const loaded = await loadSourcesForState(stateBlob.state, meta)
+  const loaded = await loadSourcesForState(stateBlob.sources, meta)
   if (!loaded) return false
   store.loadSources(
     loaded.sources,
     loaded.docs,
-    stateBlob.state.activeSourceId ?? loaded.sources[0]?.id ?? null,
+    stateBlob.editorDocuments[stateBlob.standaloneDocumentId]?.activeSourceId ??
+      loaded.sources[0]?.id ??
+      null,
   )
   await applyBlob(stateBlob)
   const firstSource = loaded.sources[0]
-  useStore.getState().set({
+  useStore.setState({
     project: {
       ...meta,
       sourcePath: firstSource?.path ?? meta.sourcePath,
@@ -177,6 +254,8 @@ export async function openProject(meta: ProjectMeta): Promise<boolean> {
       autosaveAt: null,
     },
     screen: 'editor',
+    projectRevision: restored || loaded.changed ? 1 : 0,
+    savedRevision: 0,
     dirty: restored || loaded.changed,
   })
   if (loaded.changed) {
@@ -215,7 +294,13 @@ export async function createProjectFrom(sourcePath?: string): Promise<boolean> {
       sourceName,
       state: captureBlob(),
     })
-    useStore.getState().set({ project: meta, screen: 'editor', dirty: false })
+    const current = useStore.getState()
+    useStore.setState({
+      project: meta,
+      screen: 'editor',
+      savedRevision: current.projectRevision,
+      dirty: false,
+    })
     store.toast('success', `已建立專案「${meta.name}」`)
     return true
   } catch (error) {

@@ -1,122 +1,89 @@
-import type { EditorState, SourceAsset, StoredTrack } from '../project/types.js'
-import { newTrack, useStore, type Slot, type Track } from './state/store.js'
+import type { EditorDocument } from '../project/types.js'
+import {
+  captureDocumentState,
+  runtimeDocument,
+  useStore,
+  type DocumentState,
+} from './state/store.js'
 
-export function captureEditorState(): EditorState {
+function persisted(document: DocumentState): EditorDocument {
+  return {
+    tracks: document.tracks.map((track) => ({
+      ...track,
+      slots: track.slots.map((slot) => ({ ...slot })),
+    })),
+    visibility: document.visibility.map(([key, visible]) => [key, visible]),
+    fps: document.fps,
+    playCount: document.playCount,
+    format: document.format,
+    lineTarget: document.lineTarget,
+    exportWidth: document.exportWidth,
+    exportHeight: document.exportHeight,
+    lockAspect: document.lockAspect,
+    scaleMode: document.scaleMode,
+    mergeIdentical: document.mergeIdentical,
+    staticFrame: document.staticFrame,
+    gifColors: document.gifColors,
+    activeSourceId: document.activeSourceId,
+    contentRevision: document.contentRevision,
+  }
+}
+
+/** 取得作用中文件；不再把專案 sources 複製進每份文件。 */
+export function captureEditorState(): EditorDocument {
+  return persisted(captureDocumentState(useStore.getState()))
+}
+
+/** 存檔前先把根層工作副本寫回作用中文件。 */
+export function captureEditorDocuments(): Record<string, EditorDocument> {
   const state = useStore.getState()
-  return {
-    sources: state.sources,
-    activeSourceId: state.activeSourceId ?? undefined,
-    tracks: state.tracks,
-    visibility: [...state.visibility],
-    fps: state.fps,
-    playCount: state.playCount,
-    format: state.format,
-    lineTarget: state.lineTarget,
-    exportWidth: state.exportWidth,
-    exportHeight: state.exportHeight,
-    lockAspect: state.lockAspect,
-    scaleMode: state.scaleMode,
-    mergeIdentical: state.mergeIdentical,
-    staticFrame: state.staticFrame,
-    gifColors: state.gifColors,
+  const documents = {
+    ...state.documents,
+    [state.activeDocumentId]: captureDocumentState(state),
   }
-}
-
-function fallbackSource(stored: EditorState): SourceAsset | undefined {
-  const current = useStore.getState()
-  const storedSource = stored.sources?.[0]
-  if (storedSource) return storedSource
-  const loadedSource = current.sources[0]
-  if (loadedSource) return loadedSource
-  if (!current.doc) return undefined
-  return {
-    id: crypto.randomUUID(),
-    path: current.doc.filePath,
-    name: current.doc.filePath.split(/[\\/]/).at(-1) ?? current.doc.filePath,
-  }
-}
-
-function normalizeSlot(
-  slot: { sourceId?: string | null; layerId: number | null },
-  sourceId: string | null,
-): Slot {
-  return {
-    sourceId: slot.layerId === null ? null : (slot.sourceId ?? sourceId),
-    layerId: slot.layerId,
-  }
-}
-
-function tracksFrom(stored: EditorState, sourceId: string | null): Track[] {
-  if (stored.tracks?.length)
-    return stored.tracks.map((track: StoredTrack) => ({
-      ...track,
-      slots: track.slots.map((slot) => normalizeSlot(slot, sourceId)),
-    }))
-  const track = newTrack('圖層 1', stored.slots?.length ?? 8)
-  return [
-    {
-      ...track,
-      slots: stored.slots?.map((slot) => normalizeSlot(slot, sourceId)) ?? track.slots,
-      zoom: stored.zoom ?? 1,
-      offsetX: stored.offsetX ?? 0,
-      offsetY: stored.offsetY ?? 0,
-    },
-  ]
-}
-
-function visibilityFrom(stored: EditorState, sourceId: string | null): Map<string, boolean> {
-  const entries = stored.visibility as Array<[string | number, boolean]>
-  return new Map(
-    entries.flatMap(([key, visible]) => {
-      if (typeof key === 'string') return [[key, visible] as [string, boolean]]
-      return sourceId ? [[`${sourceId}:${key}`, visible] as [string, boolean]] : []
-    }),
+  return Object.fromEntries(
+    Object.entries(documents).map(([id, document]) => [id, persisted(document)]),
   )
 }
 
-export function applyEditorState(stored: EditorState): void {
+/**
+ * 以快照覆蓋作用中文件。一般呼叫是語意變更，不會再暗中把 dirty 清掉；
+ * 專案剛載入請由 applyBlob 的初始化路徑一次設定完整 store。
+ */
+export function applyEditorState(stored: EditorDocument): void {
   const state = useStore.getState()
-  const fallback = fallbackSource(stored)
-  const sources = stored.sources?.length ? stored.sources : fallback ? [fallback] : state.sources
-  const docs =
-    fallback && state.doc && !state.docs[fallback.id]
-      ? { ...state.docs, [fallback.id]: state.doc }
-      : state.docs
-  // active 一定要挑「真的載得起來」的那一個。只檢查 sources 的話，
-  // 上次用的素材剛好不見時整個編輯器會停在 doc=null，連匯出都會說「請先開啟檔案」，
-  // 即使其他素材都好好的。
-  const loadable = (id: string | null | undefined): boolean => Boolean(id && docs[id])
-  const activeSourceId = loadable(stored.activeSourceId)
-    ? stored.activeSourceId!
-    : loadable(fallback?.id)
-      ? fallback!.id
-      : (sources.find((source) => docs[source.id])?.id ?? sources[0]?.id ?? null)
-
-  useStore.getState().set({
-    sources,
-    activeSourceId,
-    docs,
-    doc: activeSourceId ? (docs[activeSourceId] ?? null) : null,
-    tracks: tracksFrom(stored, activeSourceId),
+  const next = runtimeDocument({ ...stored, contentRevision: stored.contentRevision + 1 })
+  const projectRevision = state.projectRevision + 1
+  useStore.setState({
+    documents: {
+      ...state.documents,
+      [state.activeDocumentId]: next,
+    },
+    tracks: next.tracks,
+    visibility: new Map(next.visibility),
+    fps: next.fps,
+    playCount: next.playCount,
+    format: next.format,
+    lineTarget: next.lineTarget,
+    exportWidth: next.exportWidth,
+    exportHeight: next.exportHeight,
+    lockAspect: next.lockAspect,
+    scaleMode: next.scaleMode,
+    mergeIdentical: next.mergeIdentical,
+    staticFrame: next.staticFrame,
+    gifColors: next.gifColors,
+    activeSourceId: next.activeSourceId ?? null,
+    doc: next.activeSourceId ? (state.docs[next.activeSourceId] ?? null) : null,
+    contentRevision: next.contentRevision,
     activeTrack: 0,
-    selection: [],
-    visibility: visibilityFrom(stored, activeSourceId),
-    fps: stored.fps,
-    playCount: stored.playCount,
-    format: stored.format,
-    lineTarget: stored.lineTarget,
-    exportWidth: stored.exportWidth,
-    exportHeight: stored.exportHeight,
-    lockAspect: stored.lockAspect,
-    scaleMode: stored.scaleMode,
-    mergeIdentical: stored.mergeIdentical,
-    staticFrame: stored.staticFrame ?? 0,
-    gifColors: stored.gifColors ?? 256,
-    playhead: 0,
-    selectedSlot: 0,
-    playing: false,
+    trimmed: {},
     past: [],
     future: [],
-    dirty: false,
+    selection: [],
+    selectedSlot: 0,
+    playhead: 0,
+    playing: false,
+    projectRevision,
+    dirty: projectRevision !== state.savedRevision,
   })
 }
