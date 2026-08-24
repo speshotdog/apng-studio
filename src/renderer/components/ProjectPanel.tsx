@@ -8,6 +8,7 @@ import {
 } from '../project.js'
 import { askText } from '../prompt.js'
 import { useStore } from '../state/store.js'
+import { refreshActiveDocumentCellIfStale } from '../packDocument.js'
 
 /**
  * 編輯器頂端的專案列。永遠看得到「現在動的是哪一份」與「存了沒」，
@@ -26,9 +27,11 @@ export function ProjectPanel(): React.JSX.Element {
       const state = useStore.getState()
       if (!state.dirty || !state.project) return
       const target = state.project.id
-      void window.api
-        .autosaveProject(target, captureBlob())
-        .catch((error: unknown) => console.warn(`自動存檔失敗：${String(error)}`))
+      void (async () => {
+        await refreshActiveDocumentCellIfStale()
+        if (useStore.getState().project?.id !== target) return
+        await window.api.autosaveProject(target, captureBlob())
+      })().catch((error: unknown) => console.warn(`自動存檔失敗：${String(error)}`))
     }, AUTOSAVE_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [])

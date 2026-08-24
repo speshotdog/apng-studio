@@ -1,9 +1,41 @@
 import React from 'react'
 import { EXPORT_TARGETS, type ExportTarget } from '../../codec/line.js'
 import type { PackImportCell } from '../../project/types.js'
+import { createEntityId } from '../../project/id.js'
 import { packImportMessage } from '../packMessage.js'
+import { refreshAllStaleDocumentCells, refreshLeavingActiveDocumentCell } from '../packDocument.js'
 import { askConfirm } from '../prompt.js'
-import { useStore } from '../state/store.js'
+import {
+  captureDocumentState,
+  newTrack,
+  runtimeDocument,
+  useStore,
+  type State,
+} from '../state/store.js'
+
+function newPackDocument(state: State) {
+  const spec = EXPORT_TARGETS[state.packTarget]
+  const width = spec.fixedSize?.width ?? spec.maxWidth
+  const height = spec.fixedSize?.height ?? spec.maxHeight
+  const format = state.packTarget === 'plurkEmoticon' ? 'gif' : spec.animated ? 'apng' : 'png'
+  return runtimeDocument({
+    tracks: [newTrack('圖層 1', 8)],
+    visibility: [...state.visibility],
+    fps: state.fps,
+    playCount: state.playCount,
+    format,
+    lineTarget: state.packTarget,
+    exportWidth: width,
+    exportHeight: height,
+    lockAspect: state.lockAspect,
+    scaleMode: state.scaleMode,
+    mergeIdentical: state.mergeIdentical,
+    staticFrame: 0,
+    gifColors: state.gifColors,
+    activeSourceId: state.activeSourceId ?? undefined,
+    contentRevision: 0,
+  })
+}
 
 function errorFor(
   cell: PackImportCell | undefined,
@@ -63,14 +95,32 @@ export function PackPanel(): React.JSX.Element {
       state.toast('error', `${file.name} 不是 PNG，貼圖組只吃 PNG／APNG`)
       return true
     }
+    const previous = useStore.getState().packCells.find((cell) => cell.index === index)
+    if (
+      previous?.documentId &&
+      !(await askConfirm(
+        '覆蓋文件格',
+        `第 ${String(index).padStart(2, '0')} 格的可編輯文件與復原記錄會被丟棄，確定改成外部 PNG 嗎？`,
+        '覆蓋',
+      ))
+    )
+      return true
     try {
       const filePath = window.api.getPathForFile(file)
       const encoded = await window.api.readPackImage(
         filePath ? { filePath } : { bytes: new Uint8Array(await file.arrayBuffer()) },
       )
-      state.set({
+      const current = useStore.getState()
+      const documentId = current.packCells.find((cell) => cell.index === index)?.documentId
+      if (documentId && current.activeDocumentId === documentId)
+        current.switchDocument(current.standaloneDocumentId)
+      const afterSwitch = useStore.getState()
+      const documents = { ...afterSwitch.documents }
+      if (documentId) delete documents[documentId]
+      afterSwitch.set({
+        documents,
         packCells: [
-          ...state.packCells.filter((cell) => cell.index !== index),
+          ...afterSwitch.packCells.filter((cell) => cell.index !== index),
           { index, sourcePath: filePath ?? '', ...encoded },
         ],
       })
@@ -98,29 +148,77 @@ export function PackPanel(): React.JSX.Element {
     state.set({ packCells: [...renumbered, ...accessories] })
   }
 
-  /** 點一格有編輯狀態的貼圖 → 回到單張動畫頁繼續改。 */
-  const editCell = async (cell: PackImportCell): Promise<void> => {
-    if (!cell.documentId || !state.documents[cell.documentId]) return
-    state.switchDocument(cell.documentId)
-    state.set({ mode: 'animation' })
-    state.toast('info', `已回到第 ${cell.index} 格的編輯狀態`)
+  /** 文件格直接開啟；空格建立空文件。外部圖片格維持不可編輯。 */
+  const openCell = (index: number, cell?: PackImportCell): void => {
+    if (cell && !cell.documentId) return
+    const current = useStore.getState()
+    if (cell?.documentId && current.documents[cell.documentId]) {
+      if (current.activeDocumentId !== cell.documentId) void refreshLeavingActiveDocumentCell()
+      current.switchDocument(cell.documentId)
+      current.set({ mode: 'animation' })
+      return
+    }
+    void refreshLeavingActiveDocumentCell()
+    const documentId = createEntityId()
+    const document = newPackDocument(current)
+    current.set({
+      documents: {
+        ...current.documents,
+        [current.activeDocumentId]: captureDocumentState(current),
+        [documentId]: document,
+      },
+      packCells: [
+        ...current.packCells.filter((item) => item.index !== index),
+        {
+          index,
+          sourcePath: '',
+          pngBase64: '',
+          width: document.exportWidth,
+          height: document.exportHeight,
+          byteLength: 0,
+          frameCount: 0,
+          documentId,
+          renderedRevision: -1,
+          mime: document.format === 'gif' ? 'image/gif' : 'image/png',
+        },
+      ],
+    })
+    const latest = useStore.getState()
+    latest.switchDocument(documentId)
+    latest.set({ mode: 'animation' })
   }
 
   const pack = async (): Promise<void> => {
-    const missing = indexes.filter((index) => !cells.has(index))
+    const refreshed = await refreshAllStaleDocumentCells()
+    if (refreshed.staleIndexes.length) {
+      state.toast(
+        'error',
+        `這些格子的縮圖仍待更新，已停止打包：${refreshed.staleIndexes
+          .map((index) => (typeof index === 'number' ? String(index).padStart(2, '0') : index))
+          .join('、')}`,
+      )
+      return
+    }
+    const current = useStore.getState()
+    const currentCells = new Map(current.packCells.map((cell) => [cell.index, cell]))
+    const missing = indexes.filter((index) => !currentCells.has(index))
+    const currentErrors = indexes.flatMap((index) => {
+      const error = errorFor(currentCells.get(index), index, current.packTarget)
+      return error && error !== '尚未匯入' ? [`${index}：${error}`] : []
+    })
     if (
-      (missing.length || errors.length) &&
+      (missing.length || currentErrors.length) &&
       !(await askConfirm(
         '貼圖組還沒完成',
-        `尚有空格：${missing.map((index) => (typeof index === 'number' ? String(index).padStart(2, '0') : index)).join('、') || '無'}；${errors.length} 項錯誤，仍要打包嗎？`,
+        `尚有空格：${missing.map((index) => (typeof index === 'number' ? String(index).padStart(2, '0') : index)).join('、') || '無'}；${currentErrors.length} 項錯誤，仍要打包嗎？`,
         '仍要打包',
       ))
     )
       return
     const result = await window.api.exportPack(
       undefined,
-      state.packCells.filter((cell) => indexes.includes(cell.index)),
-      state.packTarget,
+      current.packCells.filter((cell) => indexes.includes(cell.index)),
+      current.packTarget,
     )
     state.toast(
       result.ok ? 'success' : 'error',
@@ -135,7 +233,7 @@ export function PackPanel(): React.JSX.Element {
     const error = errorFor(cell, index, state.packTarget)
     return (
       <article
-        className={`pack-cell ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''} ${cell?.documentId ? 'editable' : ''}`}
+        className={`pack-cell ${cell ? 'filled' : 'empty'} ${error && error !== '尚未匯入' ? 'invalid' : ''} ${!cell || cell.documentId ? 'clickable' : ''}`}
         key={index}
         draggable={Boolean(cell)}
         onDragStart={(event) =>
@@ -156,14 +254,24 @@ export function PackPanel(): React.JSX.Element {
           }
           if (event.dataTransfer.files.length) void dropImage(index, event.dataTransfer.files)
         }}
-        onClick={() => cell?.documentId && void editCell(cell)}
-        title={cell?.documentId ? '點一下回到這張的編輯畫面' : undefined}
+        onClick={() => openCell(index, cell)}
+        title={!cell || cell.documentId ? '點一下進入這一格的編輯畫面' : undefined}
       >
-        {cell && <img draggable={false} src={`data:image/png;base64,${cell.pngBase64}`} />}
+        {cell?.pngBase64 && (
+          <img
+            draggable={false}
+            src={`data:${cell.mime ?? 'image/png'};base64,${cell.pngBase64}`}
+          />
+        )}
         <b>{String(index).padStart(2, '0')}</b>
-        <small>{cell ? `${cell.width}×${cell.height}` : '空'}</small>
+        <small>
+          {cell
+            ? cell.documentId && !cell.pngBase64
+              ? '縮圖待更新'
+              : `${cell.width}×${cell.height}`
+            : '空'}
+        </small>
         {cell && cell.frameCount > 1 && <em>▶ {cell.frameCount} 幀</em>}
-        {cell?.documentId && <i className="editable-badge">可編輯</i>}
         {error && error !== '尚未匯入' && <span>{error}</span>}
       </article>
     )
@@ -255,7 +363,10 @@ export function PackPanel(): React.JSX.Element {
                   }}
                 >
                   {cell && (
-                    <img draggable={false} src={`data:image/png;base64,${cell.pngBase64}`} />
+                    <img
+                      draggable={false}
+                      src={`data:${cell.mime ?? 'image/png'};base64,${cell.pngBase64}`}
+                    />
                   )}
                   <b>{index}</b>
                   <small>

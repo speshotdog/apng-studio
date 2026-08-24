@@ -29,6 +29,16 @@ function persisted(document: DocumentState): EditorDocument {
   }
 }
 
+/** 取得指定文件的一致快照；作用中文件要從根層工作副本擷取。 */
+export function captureEditorDocument(documentId: string): EditorDocument | null {
+  const state = useStore.getState()
+  const document =
+    documentId === state.activeDocumentId
+      ? captureDocumentState(state)
+      : state.documents[documentId]
+  return document ? persisted(document) : null
+}
+
 /** 取得作用中文件；不再把專案 sources 複製進每份文件。 */
 export function captureEditorState(): EditorDocument {
   return persisted(captureDocumentState(useStore.getState()))

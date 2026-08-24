@@ -113,18 +113,17 @@ async function hydratePackCells(cells: ProjectPackCell[]): Promise<PackImportCel
   const hydrated: PackImportCell[] = []
   for (const cell of cells) {
     if (cell.kind === 'document') {
-      if (!cell.encoded) continue
       hydrated.push({
         index: cell.index,
         sourcePath: '',
-        pngBase64: cell.encoded.base64,
-        width: cell.encoded.width,
-        height: cell.encoded.height,
-        byteLength: cell.encoded.byteLength,
-        frameCount: cell.encoded.frameCount,
+        pngBase64: cell.encoded?.base64 ?? '',
+        width: cell.encoded?.width ?? 0,
+        height: cell.encoded?.height ?? 0,
+        byteLength: cell.encoded?.byteLength ?? 0,
+        frameCount: cell.encoded?.frameCount ?? 0,
         documentId: cell.documentId,
-        renderedRevision: cell.encoded.renderedRevision,
-        mime: cell.encoded.mime,
+        renderedRevision: cell.encoded?.renderedRevision ?? -1,
+        mime: cell.encoded?.mime ?? 'image/png',
       })
       continue
     }
@@ -564,6 +563,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const info = pngInfo(bytes)
       return {
         pngBase64: Buffer.from(bytes).toString('base64'),
+        mime: 'image/png',
         byteLength: bytes.length,
         ...info,
       }
@@ -573,6 +573,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const encoded = encodeExport(payload)
     return {
       pngBase64: Buffer.from(encoded.bytes).toString('base64'),
+      mime: payload.format === 'gif' ? 'image/gif' : 'image/png',
       width: payload.width,
       height: payload.height,
       byteLength: encoded.byteLength,

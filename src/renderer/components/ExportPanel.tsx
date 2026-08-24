@@ -2,10 +2,9 @@ import { useMemo, useState } from 'react'
 import { EXPORT_TARGETS, validateForLine, type ExportTarget } from '../../codec/line.js'
 import { encodeGif } from '../../codec/gif.js'
 import type { ExportResult, GiphyUploadResult, PublicSettings } from '../../preload/api.js'
-import { createEntityId } from '../../project/id.js'
 import { createExportPayload, exportTo } from '../export.js'
 import { planFromSlots } from '../plan.js'
-import { captureDocumentState, useStore, type TargetSettings } from '../state/store.js'
+import { useStore, type TargetSettings } from '../state/store.js'
 import { autoFixForLine } from '../../codec/autofix.js'
 import { askConfirm } from '../prompt.js'
 import { saveCurrentProject } from '../project.js'
@@ -186,48 +185,6 @@ export function ExportPanel(props: {
       const done = await window.api.saveMultiZip(payloads)
       setResult(done)
       toast(done.ok ? 'success' : 'error', done.ok ? 'ZIP 打包完成' : (done.error ?? '打包失敗'))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const saveToPack = async (): Promise<void> => {
-    if (!doc) return
-    setBusy(true)
-    try {
-      const encoded = await window.api.encodeForPack(await createExportPayload())
-      const used = new Set(
-        state.packCells.flatMap((cell) => (typeof cell.index === 'number' ? [cell.index] : [])),
-      )
-      let slot = 1
-      while (used.has(slot) && slot <= state.packCount) slot++
-      if (slot > state.packCount) {
-        toast('error', `貼圖組 ${state.packCount} 格已滿，請先調整張數或清掉一格`)
-        return
-      }
-      const current = useStore.getState()
-      const documentId = createEntityId()
-      const document = {
-        ...captureDocumentState(current),
-        past: [],
-        future: [],
-      }
-      set({
-        documents: { ...current.documents, [documentId]: document },
-        packCells: [
-          ...current.packCells,
-          {
-            index: slot,
-            sourcePath: '',
-            ...encoded,
-            documentId,
-            renderedRevision: document.contentRevision,
-            mime: 'image/png',
-          },
-        ],
-      })
-      toast('success', `已存入貼圖組第 ${String(slot).padStart(2, '0')} 格`)
-    } catch (error) {
-      toast('error', `存入貼圖組失敗：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setBusy(false)
     }
@@ -748,14 +705,6 @@ export function ExportPanel(props: {
             打包成 ZIP
           </button>
         )}
-        <button
-          className="pack-save-button"
-          disabled={!doc || busy}
-          title="把目前這張動畫存進貼圖組的下一個空格"
-          onClick={() => void saveToPack()}
-        >
-          存入貼圖組
-        </button>
         <button
           className={props.settings?.hasGiphyKey ? 'giphy-button' : 'giphy-button secondary'}
           disabled={!doc || busy}

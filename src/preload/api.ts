@@ -74,6 +74,7 @@ export interface DraftListing {
 /** 存進貼圖組時，主程序回傳的編碼結果。 */
 export interface PackEncoded {
   pngBase64: string
+  mime?: string
   width: number
   height: number
   byteLength: number

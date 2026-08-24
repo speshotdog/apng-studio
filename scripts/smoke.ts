@@ -836,24 +836,24 @@ async function run(): Promise<void> {
   assert.equal(rendererGif.error, undefined, `renderer 端 GIF 編碼失敗：${rendererGif.error}`)
   assert.ok(rendererGif.bytes > 1000, 'renderer 端 GIF 編碼出來的位元組太少')
 
-  // 存進貼圖組再點回來編輯，之後右側面板必須還能操作。
+  // 點貼圖組空格建立文件，之後右側面板必須還能操作。
   await window.webContents.executeJavaScript(
     `window.addEventListener('error', (e) => { window.__smokeLastError = String(e.message) }); window.addEventListener('unhandledrejection', (e) => { window.__smokeLastError = String(e.reason && e.reason.message ? e.reason.message : e.reason) })`,
   )
   const packRoundTrip = await window.webContents.executeJavaScript(`(async () => {
     const smoke = window.__smoke, store = smoke.store
     window.confirm = () => { throw new Error('不該再用原生 confirm') }
-    store.getState().set({ mode: 'animation', packTarget: 'sticker', packCount: 8, packCells: [] })
+    store.getState().set({ mode: 'pack', packTarget: 'sticker', packCount: 8, packCells: [] })
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const saveButton = document.querySelector('.pack-save-button')
-    if (!saveButton) return { error: '找不到「存入貼圖組」按鈕' }
-    saveButton.click()
-    await new Promise((resolve) => setTimeout(resolve, 600))
+    const emptyCell = document.querySelector('.pack-cell.empty.clickable')
+    if (!emptyCell) return { error: '找不到可建立文件的貼圖組空格' }
+    emptyCell.click()
+    await new Promise((resolve) => setTimeout(resolve, 100))
     const saved = store.getState().packCells.length
     store.getState().set({ mode: 'pack' })
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const cell = document.querySelector('.pack-cell.editable')
-    if (!cell) return { saved, error: '貼圖組裡沒有可編輯的格子' }
+    const cell = document.querySelector('.pack-cell.clickable.filled')
+    if (!cell) return { saved, error: '貼圖組裡沒有文件格' }
     cell.click()
     await new Promise((resolve) => setTimeout(resolve, 600))
     // 剛存進去的就是目前這份狀態，不該再跳「會覆蓋進度」的確認框。
@@ -874,8 +874,8 @@ async function run(): Promise<void> {
           (window.__smokeLastError ?? '無') +
           '｜docPath=' +
           (store.getState().doc?.filePath ?? '無') +
-          '｜editorPath=' +
-          (store.getState().packCells[0]?.editor?.clipPath ?? '無') +
+          '｜documentId=' +
+          (store.getState().packCells[0]?.documentId ?? '無') +
           '｜dirty=' +
           store.getState().dirty +
           '｜toasts=' +
@@ -896,7 +896,7 @@ async function run(): Promise<void> {
     }
   })()`)
   assert.equal(packRoundTrip.error, undefined, packRoundTrip.error)
-  assert.equal(packRoundTrip.saved, 1, '「存入貼圖組」沒有存進去')
+  assert.equal(packRoundTrip.saved, 1, '點空格沒有建立文件格')
   assert.equal(packRoundTrip.mode, 'animation', '點貼圖組格子應該回到單張動畫頁')
   assert.equal(packRoundTrip.disabled, false, '輸出目標下拉選單被停用')
   assert.equal(packRoundTrip.pointerEvents, 'auto', '輸出目標下拉選單收不到滑鼠事件')

@@ -3,6 +3,7 @@ import type { ProjectBlob, ProjectMeta, ProjectPackCell, SourceAsset } from '../
 import { askConfirm, askText } from './prompt.js'
 import { captureEditorDocuments } from './snapshot.js'
 import { runtimeDocument, useStore } from './state/store.js'
+import { refreshActiveDocumentCellIfStale } from './packDocument.js'
 
 /** 自動存檔間隔。夠短到當機不會痛，又不會一直在寫磁碟。 */
 export const AUTOSAVE_INTERVAL_MS = 30_000
@@ -15,15 +16,17 @@ export function captureBlob(): ProjectBlob {
           kind: 'document',
           index: cell.index,
           documentId: cell.documentId,
-          encoded: {
-            base64: cell.pngBase64,
-            mime: cell.mime ?? 'image/png',
-            width: cell.width,
-            height: cell.height,
-            byteLength: cell.byteLength,
-            frameCount: cell.frameCount,
-            renderedRevision: cell.renderedRevision ?? 0,
-          },
+          encoded: cell.pngBase64
+            ? {
+                base64: cell.pngBase64,
+                mime: cell.mime ?? 'image/png',
+                width: cell.width,
+                height: cell.height,
+                byteLength: cell.byteLength,
+                frameCount: cell.frameCount,
+                renderedRevision: cell.renderedRevision ?? -1,
+              }
+            : undefined,
         }
       : {
           kind: 'external',
@@ -153,6 +156,7 @@ export async function saveCurrentProject(): Promise<boolean> {
   const savingId = state.project.id
   const savingRevision = state.projectRevision
   try {
+    await refreshActiveDocumentCellIfStale()
     const meta = await window.api.saveProject(savingId, captureBlob(), thumbnail())
     // 存檔期間使用者可能已經切到別的專案；慢一步回來的結果不可以蓋掉現在這一份。
     if (useStore.getState().project?.id !== savingId) return true
@@ -178,6 +182,7 @@ export async function saveAsNewProject(): Promise<ProjectMeta | null> {
   const name = await askText('另存新專案', `${state.project?.name ?? '未命名'} 拷貝`)
   if (!name) return null
   try {
+    await refreshActiveDocumentCellIfStale()
     const meta = await window.api.createProject({
       name,
       sourcePath: firstSource?.path ?? state.doc.filePath,

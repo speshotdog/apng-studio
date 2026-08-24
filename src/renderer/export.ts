@@ -1,30 +1,63 @@
 import type { ExportPayload, ExportResult } from '../preload/api.js'
-import { allLayerIds, composeFrame, ensureBitmap } from './compose.js'
+import {
+  allDocumentLayerIds,
+  bitmapToImageData,
+  composeDocumentFrame,
+  ensureDocumentBitmap,
+  type BitmapLoader,
+  type DocumentComposeSnapshot,
+} from './compose.js'
 import { useStore } from './state/store.js'
 import { EXPORT_TARGETS } from '../codec/line.js'
 import { frameDelays } from '../codec/timing.js'
+import { captureEditorDocument } from './snapshot.js'
 
-export async function createExportPayload(size?: {
-  width: number
-  height: number
-}): Promise<ExportPayload> {
+export type ExportDocumentSnapshot = DocumentComposeSnapshot
+
+export function captureExportSnapshot(
+  documentId = useStore.getState().activeDocumentId,
+): ExportDocumentSnapshot {
   const state = useStore.getState()
-  if (!state.doc) throw new Error('請先開啟 .clip 檔案')
-  await Promise.all(allLayerIds().map((slot) => ensureBitmap(slot.sourceId, slot.layerId)))
-  const current = useStore.getState()
-  const spec = EXPORT_TARGETS[current.lineTarget]
-  const frameCount = current.frameCount()
+  const document = captureEditorDocument(documentId)
+  if (!document) throw new Error('找不到要匯出的編輯文件')
+  return {
+    document,
+    sources: state.sources.map((source) => ({ ...source })),
+    bitmaps: new Map(state.bitmaps),
+  }
+}
+
+const browserBitmapLoader: BitmapLoader = {
+  renderLayer: (filePath, layerId, overrides) =>
+    window.api.renderLayer(filePath, layerId, overrides),
+  createBitmap: (value) =>
+    createImageBitmap(bitmapToImageData(value.rgba, value.width, value.height)),
+}
+
+export async function createExportPayloadFromSnapshot(
+  snapshot: ExportDocumentSnapshot,
+  size?: { width: number; height: number },
+  loader: BitmapLoader = browserBitmapLoader,
+): Promise<ExportPayload> {
+  const { document } = snapshot
+  await Promise.all(
+    allDocumentLayerIds(document).map((slot) =>
+      ensureDocumentBitmap(snapshot, slot.sourceId, slot.layerId, loader),
+    ),
+  )
+  const spec = EXPORT_TARGETS[document.lineTarget]
+  const frameCount = Math.max(1, ...document.tracks.map((track) => track.slots.length))
   const indexes = spec.staticOnly
-    ? [Math.min(current.staticFrame, frameCount - 1)]
+    ? [Math.min(document.staticFrame, frameCount - 1)]
     : Array.from({ length: frameCount }, (_, index) => index)
-  const delays = frameDelays(indexes.length, current.fps)
-  const width = size?.width ?? current.exportWidth
-  const height = size?.height ?? current.exportHeight
+  const delays = frameDelays(indexes.length, document.fps)
+  const width = size?.width ?? document.exportWidth
+  const height = size?.height ?? document.exportHeight
   let frames = indexes.map((index, position) => ({
-    rgba: composeFrame(index, width, height, current.scaleMode),
+    rgba: composeDocumentFrame(snapshot, index, width, height, document.scaleMode),
     delayMs: delays[position]!,
   }))
-  if (current.format === 'gif' && current.mergeIdentical) {
+  if (document.format === 'gif' && document.mergeIdentical) {
     frames = frames.reduce<typeof frames>((merged, frame) => {
       const previous = merged[merged.length - 1]
       const identical =
@@ -36,29 +69,37 @@ export async function createExportPayload(size?: {
     }, [])
   }
   return {
-    format: current.format,
+    format: document.format,
     width,
     height,
     frames,
-    numPlays: current.playCount,
-    mergeIdentical: current.mergeIdentical,
-    gif: { maxColors: current.gifColors },
+    numPlays: document.playCount,
+    mergeIdentical: document.mergeIdentical,
+    gif: { maxColors: document.gifColors },
   }
 }
 
+export async function createExportPayload(size?: {
+  width: number
+  height: number
+}): Promise<ExportPayload> {
+  return createExportPayloadFromSnapshot(captureExportSnapshot(), size)
+}
+
 export async function exportTo(filePath?: string): Promise<ExportResult> {
-  const spec = EXPORT_TARGETS[useStore.getState().lineTarget]
+  const snapshot = captureExportSnapshot()
+  const spec = EXPORT_TARGETS[snapshot.document.lineTarget]
   if (spec.multiSize) {
     const payloads = await Promise.all(
       spec.multiSize.map(async (size) => ({
         suffix: size.suffix,
-        payload: await createExportPayload(size),
+        payload: await createExportPayloadFromSnapshot(snapshot, size),
       })),
     )
     return filePath
       ? window.api.exportMultiTo(filePath, payloads)
       : window.api.saveMultiExport(payloads)
   }
-  const payload = await createExportPayload()
+  const payload = await createExportPayloadFromSnapshot(snapshot)
   return filePath ? window.api.exportTo(filePath, payload) : window.api.saveExport(payload)
 }

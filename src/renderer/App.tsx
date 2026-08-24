@@ -15,6 +15,7 @@ import { DraftBrowser } from './components/DraftBrowser.js'
 import { createProjectFrom, guardUnsaved, saveCurrentProject } from './project.js'
 import type { MenuCommand, PublicSettings } from '../preload/api.js'
 import { createEntityId } from '../project/id.js'
+import { refreshLeavingActiveDocumentCell } from './packDocument.js'
 
 const OPENABLE = /\.(clip|procreate|psd|psb)$/i
 
@@ -24,6 +25,23 @@ export function App(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftsOpen, setDraftsOpen] = useState(false)
   const [settings, setSettings] = useState<PublicSettings | null>(null)
+  const activePackIndex = store.packCells.find(
+    (cell) => cell.documentId === store.activeDocumentId && typeof cell.index === 'number',
+  )?.index as number | undefined
+
+  const showPack = (): void => {
+    if (mode === 'animation') void refreshLeavingActiveDocumentCell()
+    set({ mode: 'pack' })
+  }
+
+  const showStandalone = (): void => {
+    const current = useStore.getState()
+    if (current.activeDocumentId !== current.standaloneDocumentId) {
+      void refreshLeavingActiveDocumentCell()
+      current.switchDocument(current.standaloneDocumentId)
+    }
+    current.set({ mode: 'animation' })
+  }
 
   /** Add another source document without touching existing timeline slots. */
   const addSourceFrom = async (path?: string): Promise<void> => {
@@ -129,14 +147,22 @@ export function App(): React.JSX.Element {
   return (
     <main className={`app mode-${mode}`}>
       <nav className="mode-switch">
+        {activePackIndex !== undefined && (
+          <button
+            className={mode === 'animation' ? 'active' : ''}
+            onClick={() => set({ mode: 'animation' })}
+          >
+            正在編輯第 {String(activePackIndex).padStart(2, '0')} 格
+          </button>
+        )}
         <button
-          className={mode === 'animation' ? 'active' : ''}
-          onClick={() => set({ mode: 'animation' })}
+          className={mode === 'animation' && activePackIndex === undefined ? 'active' : ''}
+          onClick={showStandalone}
         >
           單張動畫
         </button>
-        <button className={mode === 'pack' ? 'active' : ''} onClick={() => set({ mode: 'pack' })}>
-          貼圖組
+        <button className={mode === 'pack' ? 'active' : ''} onClick={showPack}>
+          {mode === 'animation' && activePackIndex !== undefined ? '回貼圖組' : '貼圖組'}
         </button>
       </nav>
       <div className="top-actions">

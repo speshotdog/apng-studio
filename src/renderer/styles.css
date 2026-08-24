@@ -1171,23 +1171,12 @@ select {
   margin-top: 2px;
 }
 
-/* —— 貼圖組：可跳回編輯的格子 —— */
-.pack-cell.editable {
+/* —— 貼圖組：文件格與空格可進入編輯 —— */
+.pack-cell.clickable {
   cursor: pointer;
 }
-.pack-cell.editable:hover {
+.pack-cell.clickable:hover {
   border-color: var(--accent);
-}
-.pack-cell .editable-badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  font-style: normal;
-  font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: #efb34ccc;
-  color: #241d0d;
 }
 
 /* —— 自製輸入對話框（Electron 沒有 window.prompt） —— */
