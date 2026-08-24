@@ -125,6 +125,7 @@ export async function parseProcreate(data: Buffer): Promise<SourceDocument> {
     flat: sourceFlat,
     timeline,
     cspTimelines: [],
+    cspTimelineGroups: [],
     renderNode,
   }
 }

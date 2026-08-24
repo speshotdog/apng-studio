@@ -1181,7 +1181,7 @@ select {
 
 /* —— 自製輸入對話框（Electron 沒有 window.prompt） —— */
 .text-prompt {
-  width: min(380px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - 32px));
 }
 .text-prompt .prompt-message {
   margin: 8px 0 0;

@@ -114,5 +114,13 @@ export function parsePsd(data: Buffer): SourceDocument {
     return result
   }
 
-  return { canvas, root, flat, timeline: null, cspTimelines: [], renderNode }
+  return {
+    canvas,
+    root,
+    flat,
+    timeline: null,
+    cspTimelines: [],
+    cspTimelineGroups: [],
+    renderNode,
+  }
 }

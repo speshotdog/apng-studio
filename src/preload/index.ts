@@ -24,6 +24,8 @@ const api: Api = {
   renameProject: (id, name) => ipcRenderer.invoke('project:rename', id, name),
   duplicateProject: (id, name) => ipcRenderer.invoke('project:duplicate', id, name),
   importPackFolder: (path) => ipcRenderer.invoke('project:importFolder', path),
+  scanBatchSourceFolder: (path, packCount) =>
+    ipcRenderer.invoke('project:scanBatchSourceFolder', path, packCount),
   hydratePackCells: (cells) => ipcRenderer.invoke('project:hydratePackCells', cells),
   exportPack: (filePath, cells, target) =>
     ipcRenderer.invoke('project:exportPack', filePath, cells, target),

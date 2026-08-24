@@ -15,6 +15,13 @@ export interface CspTimeline {
   keys: CelKey[]
   warnings: string[]
 }
+export interface CspTimelineGroup {
+  name: string
+  frameRate: number
+  startFrame: number
+  endFrame: number
+  tracks: CspTimeline[]
+}
 
 function numberValue(row: Record<string, unknown>, key: string): number {
   return typeof row[key] === 'number' ? row[key] : 0
@@ -53,7 +60,10 @@ const MAX_FRAMES = 240
  * 不該因為某條時間軸格式沒見過就完全打不開。所以每條 track 各自 try/catch，
  * 失敗就跳過並留下警告。
  */
-export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): CspTimeline[] {
+export function readCspTimelineGroups(
+  db: Database,
+  chunks: Map<string, Buffer>,
+): CspTimelineGroup[] {
   const layers = new Map<string, { id: number; name: string }>()
   for (const row of queryRows(
     db,
@@ -64,10 +74,10 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
       name: textValue(row.LayerName),
     })
   }
-  const results: CspTimeline[] = []
+  const results: CspTimelineGroup[] = []
   for (const timeline of queryRows(
     db,
-    'SELECT FrameRate, StartFrame, EndFrame, FirstTrack FROM TimeLine',
+    'SELECT TimeLineName, FrameRate, StartFrame, EndFrame, FirstTrack FROM TimeLine',
   )) {
     const frameRate = numberValue(timeline, 'FrameRate') || 12
     // EndFrame 是「不含」的結尾（實測 StartFrame=0、EndFrame=20 就是 20 格），
@@ -75,6 +85,7 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
     const startFrame = numberValue(timeline, 'StartFrame')
     const rawCount = numberValue(timeline, 'EndFrame') - startFrame
     const frameCount = Math.max(0, Math.min(MAX_FRAMES, rawCount))
+    const tracks: CspTimeline[] = []
     let trackId = numberValue(timeline, 'FirstTrack')
     const visited = new Set<number>()
     while (trackId !== 0) {
@@ -162,7 +173,7 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
         const outOfRange = keys.filter((key) => key.frame < 0 || key.frame >= frameCount).length
         if (outOfRange)
           warnings.push(`有 ${outOfRange} 個關鍵影格落在 1–${frameCount} 格之外，已忽略`)
-        results.push({
+        tracks.push({
           animationFolderId: layer.id,
           animationFolderName: layer.name,
           frameRate,
@@ -175,6 +186,13 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
         console.warn(`略過讀不動的 CSP 時間軸（圖層「${layer.name}」）：${String(error)}`)
       }
     }
+    results.push({
+      name: textValue(timeline.TimeLineName),
+      frameRate,
+      startFrame,
+      endFrame: numberValue(timeline, 'EndFrame'),
+      tracks,
+    })
   }
   return results
 }

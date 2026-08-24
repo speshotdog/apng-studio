@@ -6,6 +6,84 @@ import {
 } from '../src/renderer/packDocument.js'
 import { newTrack, runtimeDocument, useStore } from '../src/renderer/state/store.js'
 import { SaveCoordinator } from '../src/renderer/saveCoordinator.js'
+import { classifyBatchFolder, planBatchCommit } from '../src/project/batch-import.js'
+import type { BatchScanFile } from '../src/project/types.js'
+
+const scanned = classifyBatchFolder(
+  'C:\\batch',
+  [
+    { name: '01.clip', path: 'C:\\batch\\01.clip' },
+    { name: '0007角色.PSD', path: 'C:\\batch\\0007角色.PSD' },
+    { name: '角色01.clip', path: 'C:\\batch\\角色01.clip' },
+    { name: '0.clip', path: 'C:\\batch\\0.clip' },
+    { name: '99.clip', path: 'C:\\batch\\99.clip' },
+    { name: '1.psd', path: 'C:\\batch\\1.psd' },
+    { name: '說明.txt', path: 'C:\\batch\\說明.txt' },
+  ],
+  40,
+)
+assert.deepEqual(
+  scanned.matched.map((file) => [file.index, file.fileName]),
+  [[7, '0007角色.PSD']],
+)
+assert.deepEqual(
+  scanned.skipped.map((file) => [file.fileName, file.reason]),
+  [
+    ['0.clip', '格號 0'],
+    ['99.clip', '超出張數'],
+    ['角色01.clip', '無數字'],
+  ],
+)
+assert.deepEqual(
+  scanned.duplicates.map((item) => item.index),
+  [1],
+)
+assert.deepEqual(
+  scanned.duplicates[0]!.files.map((file) => file.fileName),
+  ['01.clip', '1.psd'],
+)
+
+const batchFile = (index: number, fileName: string): BatchScanFile => ({
+  index,
+  fileName,
+  filePath: `C:\\batch\\${fileName}`,
+})
+const plannedBatch = planBatchCommit(
+  [
+    { file: batchFile(2, '2.clip'), value: 'good-2' },
+    { file: batchFile(3, '3-bad.clip'), error: '模擬壞檔' },
+    { file: batchFile(4, '4.clip'), value: 'good-4' },
+  ],
+  new Set([2]),
+  'overwrite',
+)
+assert.deepEqual(
+  plannedBatch.accepted.map((item) => item.file.index),
+  [2, 4],
+  '一個壞檔不得影響其他成功項',
+)
+assert.deepEqual(
+  plannedBatch.failed.map((item) => item.file.index),
+  [3],
+)
+assert.deepEqual(plannedBatch.overwritten, [2], '覆蓋清單必須只列出已有內容的成功項')
+const keptBatch = planBatchCommit(
+  [
+    { file: batchFile(2, '2.clip'), value: 'good-2' },
+    { file: batchFile(4, '4.clip'), value: 'good-4' },
+  ],
+  new Set([2]),
+  'keep',
+)
+assert.deepEqual(
+  keptBatch.accepted.map((item) => item.file.index),
+  [4],
+)
+assert.deepEqual(
+  keptBatch.keptConflicts.map((item) => item.index),
+  [2],
+)
+assert.deepEqual(keptBatch.overwritten, [])
 
 const editorDocument = (name: string, fps: number): EditorDocument => ({
   tracks: [{ ...newTrack(name, 2), id: name }],
@@ -311,6 +389,81 @@ assert.equal(
   ),
   true,
   'savedRevision 不得回退',
+)
+
+// 批次匯入的多格文件必須只做一次 store 語意提交。
+const replacedByBatch = runtimeDocument(editorDocument('replaced-by-batch', 12))
+useStore.setState((state) => ({
+  documents: { ...state.documents, oldBatch: replacedByBatch },
+  packCells: [
+    ...state.packCells,
+    {
+      index: 3,
+      sourcePath: '',
+      pngBase64: 'old-batch',
+      width: 320,
+      height: 270,
+      byteLength: 9,
+      frameCount: 1,
+      documentId: 'oldBatch',
+      renderedRevision: 0,
+    },
+  ],
+}))
+const beforeBatchRevision = useStore.getState().projectRevision
+const documentC = runtimeDocument(editorDocument('document-c', 12))
+const documentD = runtimeDocument(editorDocument('document-d', 12))
+assert.equal(
+  useStore.getState().commitPackBatch({
+    expectedProjectId: 'project-a',
+    assets: [],
+    summaries: {},
+    documents: { c: documentC, d: documentD },
+    cells: [
+      {
+        index: 3,
+        sourcePath: '',
+        pngBase64: '',
+        width: 320,
+        height: 270,
+        byteLength: 0,
+        frameCount: 0,
+        documentId: 'c',
+        renderedRevision: -1,
+      },
+      {
+        index: 4,
+        sourcePath: '',
+        pngBase64: '',
+        width: 320,
+        height: 270,
+        byteLength: 0,
+        frameCount: 0,
+        documentId: 'd',
+        renderedRevision: -1,
+      },
+    ],
+  }),
+  true,
+)
+assert.equal(useStore.getState().projectRevision, beforeBatchRevision + 1)
+assert.equal(useStore.getState().documents.oldBatch, undefined)
+assert.deepEqual(
+  useStore
+    .getState()
+    .packCells.filter((cell) => cell.index === 3 || cell.index === 4)
+    .map((cell) => cell.index)
+    .sort(),
+  [3, 4],
+)
+const afterBatch = useStore.getState()
+const batchOwnedDocumentIds = new Set([
+  afterBatch.standaloneDocumentId,
+  ...afterBatch.packCells.flatMap((cell) => (cell.documentId ? [cell.documentId] : [])),
+])
+assert(
+  Object.keys(afterBatch.documents).every((documentId) => batchOwnedDocumentIds.has(documentId)),
+  '批次覆蓋後不得留下孤兒文件',
 )
 
 console.log('Pack document verification passed')

@@ -176,3 +176,30 @@ export interface PackImportResult {
   cells: PackImportCell[]
   skipped: string[]
 }
+
+export type BatchScanSkipReason = '無數字' | '格號 0' | '超出張數'
+
+export interface BatchScanFile {
+  index: number
+  fileName: string
+  filePath: string
+}
+
+export interface BatchScanSkippedFile {
+  fileName: string
+  filePath: string
+  reason: BatchScanSkipReason
+}
+
+export interface BatchScanDuplicate {
+  index: number
+  files: BatchScanFile[]
+}
+
+/** 批次匯入來源資料夾的唯讀掃描結果。 */
+export interface BatchFolderScanResult {
+  folder: string
+  matched: BatchScanFile[]
+  skipped: BatchScanSkippedFile[]
+  duplicates: BatchScanDuplicate[]
+}

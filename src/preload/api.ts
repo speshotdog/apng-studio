@@ -1,5 +1,6 @@
 import type { ApngInfo } from '../codec/apng.js'
 import type {
+  BatchFolderScanResult,
   PackImportResult,
   ProjectBlob,
   ProjectListItem,
@@ -28,6 +29,13 @@ export interface ClipSummary {
     frameCount: number
     keys: Array<{ frame: number; celName: string }>
     warnings: string[]
+  }>
+  cspTimelineGroups: Array<{
+    name: string
+    frameRate: number
+    startFrame: number
+    endFrame: number
+    tracks: ClipSummary['cspTimelines']
   }>
 }
 export interface ExportPayload {
@@ -128,6 +136,10 @@ export interface Api {
   renameProject(id: string, name: string): Promise<ProjectMeta[]>
   duplicateProject(id: string, name: string): Promise<ProjectMeta>
   importPackFolder(path?: string): Promise<PackImportResult | null>
+  scanBatchSourceFolder(
+    path: string | undefined,
+    packCount: number,
+  ): Promise<BatchFolderScanResult | null>
   hydratePackCells(cells: ProjectPackCell[]): Promise<PackImportResult['cells']>
   exportPack(
     filePath: string | undefined,

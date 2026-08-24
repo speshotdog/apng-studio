@@ -4,11 +4,11 @@ import { readChunks } from './chunks.js'
 import { openClipDatabase, queryRows } from './db.js'
 import { decodeBitmap, parseAttribute, parseBlockChunk, type Bitmap } from './offscreen.js'
 import { buildTree, type ClipLayer } from './tree.js'
-import { readCspTimelines, type CspTimeline } from './timeline.js'
+import { readCspTimelineGroups, type CspTimeline, type CspTimelineGroup } from './timeline.js'
 
 export type { Bitmap } from './offscreen.js'
 export type { ClipLayer } from './tree.js'
-export type { CspTimeline } from './timeline.js'
+export type { CspTimeline, CspTimelineGroup } from './timeline.js'
 
 export interface ClipCanvas {
   width: number
@@ -27,6 +27,7 @@ export interface ClipDocument {
   flat: Map<number, ClipLayer>
   timeline: ClipTimeline | null
   cspTimelines: CspTimeline[]
+  cspTimelineGroups: CspTimelineGroup[]
   renderRawBitmap(layerId: number): Bitmap
   renderNode(layerId: number, overrides?: Map<number, boolean>): Bitmap
 }
@@ -115,7 +116,8 @@ export async function parseClip(data: Buffer): Promise<ClipDocument> {
         }
       : null
     const maps = databaseMaps(db)
-    const cspTimelines = readCspTimelines(db, chunks.external)
+    const cspTimelineGroups = readCspTimelineGroups(db, chunks.external)
+    const cspTimelines = cspTimelineGroups.flatMap((group) => group.tracks)
     const cache = new Map<number, Bitmap>()
     const rawCache = new Map<number, Bitmap>()
     const warned = new Set<number>()
@@ -179,7 +181,16 @@ export async function parseClip(data: Buffer): Promise<ClipDocument> {
       if (!overrides) cache.set(layerId, result)
       return result
     }
-    return { canvas, root, flat, timeline, cspTimelines, renderRawBitmap, renderNode }
+    return {
+      canvas,
+      root,
+      flat,
+      timeline,
+      cspTimelines,
+      cspTimelineGroups,
+      renderRawBitmap,
+      renderNode,
+    }
   } finally {
     db.close()
   }

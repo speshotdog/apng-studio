@@ -1,10 +1,22 @@
 import React from 'react'
 import { EXPORT_TARGETS, type ExportTarget } from '../../codec/line.js'
 import type { PackImportCell } from '../../project/types.js'
+import type { ClipSummary } from '../../preload/api.js'
+import {
+  mapWithConcurrency,
+  planBatchCommit,
+  type BatchConflictPolicy,
+  type ParsedBatchItem,
+} from '../../project/batch-import.js'
 import { createEntityId } from '../../project/id.js'
+import { buildBatchDocuments } from '../batchImport.js'
 import { packImportMessage } from '../packMessage.js'
-import { refreshAllStaleDocumentCells, refreshLeavingActiveDocumentCell } from '../packDocument.js'
-import { askConfirm } from '../prompt.js'
+import {
+  refreshAllStaleDocumentCells,
+  refreshCellCache,
+  refreshLeavingActiveDocumentCell,
+} from '../packDocument.js'
+import { askChoice, askConfirm, showNotice } from '../prompt.js'
 import {
   captureDocumentState,
   newTrack,
@@ -62,6 +74,7 @@ function errorFor(
 export function PackPanel(): React.JSX.Element {
   const state = useStore()
   const [thumbSize, setThumbSize] = React.useState(140)
+  const [batchImporting, setBatchImporting] = React.useState(false)
   const targets: ExportTarget[] = ['staticSticker', 'sticker', 'emoji', 'plurkEmoticon']
   const cells = new Map(state.packCells.map((cell) => [cell.index, cell]))
   const indexes: Array<number | 'main' | 'tab'> = [
@@ -74,11 +87,118 @@ export function PackPanel(): React.JSX.Element {
   })
   const completed = indexes.filter((index) => typeof index === 'number' && cells.has(index)).length
 
-  const importFolder = async (): Promise<void> => {
+  const importPngFolder = async (): Promise<void> => {
     const result = await window.api.importPackFolder()
     if (!result) return
     state.set({ packCells: result.cells })
     state.toast(result.skipped.length ? 'info' : 'success', packImportMessage(result))
+  }
+
+  const batchImportFolder = async (): Promise<void> => {
+    const started = useStore.getState()
+    const projectId = started.project?.id
+    if (!projectId || batchImporting) return
+    setBatchImporting(true)
+    try {
+      const scan = await window.api.scanBatchSourceFolder(undefined, started.packCount)
+      if (!scan) return
+      const afterScan = useStore.getState()
+      if (afterScan.project?.id !== projectId) return
+      const occupiedIndexes = new Set(
+        afterScan.packCells.flatMap((cell) => (typeof cell.index === 'number' ? [cell.index] : [])),
+      )
+      const conflicts = scan.matched.filter((file) => occupiedIndexes.has(file.index))
+      let policy: BatchConflictPolicy = 'overwrite'
+      if (conflicts.length) {
+        const answer = await askChoice(
+          '批次匯入有格號衝突',
+          `這些格已有內容：\n${conflicts
+            .map((file) => `第 ${String(file.index).padStart(2, '0')} 格：${file.fileName}`)
+            .join('\n')}\n\n請選擇這次批次匯入的處理方式。`,
+          [
+            { label: '覆蓋並匯入', value: 'overwrite', primary: true },
+            { label: '保留衝突格並匯入其餘', value: 'keep' },
+          ],
+        )
+        if (!answer) return
+        policy = answer as BatchConflictPolicy
+      }
+
+      const filesToParse =
+        policy === 'keep'
+          ? scan.matched.filter((file) => !occupiedIndexes.has(file.index))
+          : scan.matched
+      const parsed = await mapWithConcurrency(
+        filesToParse,
+        2,
+        async (file): Promise<ParsedBatchItem<ClipSummary>> => {
+          try {
+            const summary = await window.api.openClip(file.filePath)
+            return summary ? { file, value: summary } : { file, error: '沒有取得來源文件內容' }
+          } catch (error) {
+            return { file, error: error instanceof Error ? error.message : String(error) }
+          }
+        },
+      )
+      if (useStore.getState().project?.id !== projectId) return
+      const planned = planBatchCommit(parsed, occupiedIndexes, policy)
+      const keptConflicts = policy === 'keep' ? conflicts : planned.keptConflicts
+      const latest = useStore.getState()
+      const built = buildBatchDocuments(
+        latest,
+        projectId,
+        planned.accepted.map(({ file, value }) => ({ file, summary: value })),
+      )
+      if (planned.accepted.length && !latest.commitPackBatch(built.input)) return
+      if (planned.accepted.length)
+        await Promise.all(built.documentIds.map((documentId) => refreshCellCache(documentId)))
+      if (useStore.getState().project?.id !== projectId) return
+
+      const lines = [`成功匯入 ${planned.accepted.length} 格。`]
+      if (planned.overwritten.length)
+        lines.push(
+          `已覆蓋：${planned.overwritten
+            .map((index) => String(index).padStart(2, '0'))
+            .join('、')}`,
+        )
+      const skipped = [
+        ...scan.skipped.map((file) => `${file.fileName}（${file.reason}）`),
+        ...scan.duplicates.flatMap((duplicate) =>
+          duplicate.files.map(
+            (file) => `${file.fileName}（格號 ${duplicate.index} 有多個檔案，全部跳過）`,
+          ),
+        ),
+        ...keptConflicts.map((file) => `${file.fileName}（保留衝突格）`),
+        ...planned.failed.map((item) => `${item.file.fileName}（壞檔：${item.error}）`),
+      ]
+      if (skipped.length) lines.push(`跳過：\n${skipped.map((item) => `• ${item}`).join('\n')}`)
+      if (built.omittedAnimationFiles.length)
+        lines.push(
+          `未帶入動畫的格式：${built.omittedAnimationFiles.join('、')}（已建立綁定來源的空文件）`,
+        )
+      if (built.noCspTimelineFiles.length)
+        lines.push(`沒有可帶入 CSP 時間軸：${built.noCspTimelineFiles.join('、')}`)
+      if (built.extraTimelineFiles.length)
+        lines.push(
+          `有其他 TimeLine 未匯入：${built.extraTimelineFiles
+            .map((item) => `${item.fileName}（${item.ignoredCount} 個）`)
+            .join('、')}`,
+        )
+      if (built.timelineWarnings.length)
+        lines.push(
+          `CSP 時間軸警告：\n${built.timelineWarnings
+            .map((item) => `• ${item.fileName}：${item.warnings.join('；')}`)
+            .join('\n')}`,
+        )
+      await showNotice('批次匯入完成', lines.join('\n\n'))
+    } catch (error) {
+      if (useStore.getState().project?.id === projectId)
+        useStore
+          .getState()
+          .toast('error', `批次匯入失敗：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setBatchImporting(false)
+    }
   }
 
   /**
@@ -305,7 +425,10 @@ export function PackPanel(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <button onClick={() => void importFolder()}>匯入資料夾</button>
+        <button onClick={() => void importPngFolder()}>匯入 PNG 資料夾</button>
+        <button disabled={batchImporting} onClick={() => void batchImportFolder()}>
+          {batchImporting ? '批次匯入中…' : '批次匯入資料夾'}
+        </button>
         <label className="thumb-size">
           縮圖大小　小{' '}
           <input

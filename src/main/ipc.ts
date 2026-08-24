@@ -23,11 +23,13 @@ import type {
   PackEncoded,
 } from '../preload/api.js'
 import type {
+  BatchFolderScanResult,
   PackImportCell,
   PackImportResult,
   ProjectBlob,
   ProjectPackCell,
 } from '../project/types.js'
+import { classifyBatchFolder } from '../project/batch-import.js'
 import type { ExportTarget } from '../codec/line.js'
 import {
   autosaveProject,
@@ -107,6 +109,22 @@ async function importPackFolder(requested?: string): Promise<PackImportResult | 
     }
   }
   return { cells, skipped }
+}
+
+async function scanBatchSourceFolder(
+  requested: string | undefined,
+  packCount: number,
+): Promise<BatchFolderScanResult | null> {
+  let folder = requested
+  if (!folder) {
+    const picked = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (picked.canceled || !picked.filePaths[0]) return null
+    folder = picked.filePaths[0]
+  }
+  const entries = (await readdir(folder, { withFileTypes: true }))
+    .filter((entry) => entry.isFile())
+    .map((entry) => ({ name: entry.name, path: join(folder, entry.name) }))
+  return classifyBatchFolder(folder, entries, packCount)
 }
 
 async function hydratePackCells(cells: ProjectPackCell[]): Promise<PackImportCell[]> {
@@ -453,6 +471,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('project:importFolder', (_event, requested?: string) =>
     importPackFolder(requested),
   )
+  ipcMain.handle(
+    'project:scanBatchSourceFolder',
+    (_event, requested: string | undefined, packCount: number) =>
+      scanBatchSourceFolder(requested, packCount),
+  )
   ipcMain.handle('project:hydratePackCells', (_event, cells: ProjectPackCell[]) =>
     hydratePackCells(cells),
   )
@@ -485,6 +508,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       timeline: doc.timeline,
       tree: node(doc.root),
       cspTimelines: doc.cspTimelines,
+      cspTimelineGroups: doc.cspTimelineGroups,
     }
   })
   ipcMain.handle('clip:openBuffer', async (_event, bytes: Uint8Array): Promise<ClipSummary> => {
@@ -498,6 +522,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       timeline: doc.timeline,
       tree: node(doc.root),
       cspTimelines: doc.cspTimelines,
+      cspTimelineGroups: doc.cspTimelineGroups,
     }
   })
   ipcMain.handle(

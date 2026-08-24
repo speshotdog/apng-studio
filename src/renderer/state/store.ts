@@ -73,6 +73,14 @@ export interface DocumentState extends Omit<EditorDocument, 'tracks'> {
   future: EditSnapshot[]
 }
 
+export interface PackBatchCommitInput {
+  expectedProjectId: string
+  assets: SourceAsset[]
+  summaries: Record<string, ClipSummary>
+  documents: Record<string, DocumentState>
+  cells: PackImportCell[]
+}
+
 export interface State {
   screen: 'start' | 'editor'
   project: ProjectMeta | null
@@ -130,6 +138,7 @@ export interface State {
   setActiveSource: (sourceId: string) => void
   switchDocument: (documentId: string) => void
   replacePackCell: (index: PackCellIndex, cell: PackImportCell) => void
+  commitPackBatch: (input: PackBatchCommitInput) => boolean
   removeSource: (sourceId: string) => void
   sourceOf: (sourceId: string | null) => SourceAsset | undefined
   /** 來源檔被搬走時換一個路徑，但保留 id，所有影格的引用都不用動。 */
@@ -186,6 +195,84 @@ export function newTrack(name: string, frames: number): Track {
     offsetX: 0,
     offsetY: 0,
     slots: Array.from({ length: frames }, emptySlot),
+  }
+}
+
+export function sourceVisibilityEntries(
+  sourceId: string,
+  tree: LayerNode,
+): Array<[string, boolean]> {
+  const visibility = new Map<string, boolean>()
+  collect(sourceId, tree, visibility)
+  return [...visibility]
+}
+
+export interface CspTrackBuildResult {
+  tracks: Track[]
+  frameRate: number
+  frameCount: number
+  keyCount: number
+  warnings: string[]
+}
+
+/**
+ * CSP ImageCel 軌共用建構器。手動帶入傳一條，批次匯入傳第一個
+ * TimeLine 群組的全部軌，順序與 CSP 一致。
+ */
+export function buildCspTracks(
+  doc: ClipSummary,
+  sourceId: string,
+  timelines: ClipSummary['cspTimelines'],
+): CspTrackBuildResult {
+  if (!timelines.length) throw new Error('CSP 時間軸沒有 ImageCel 軌')
+  const warnings: string[] = []
+  let keyCount = 0
+  const tracks = timelines.map((timeline) => {
+    const visit = (node: LayerNode): LayerNode | undefined =>
+      node.id === timeline.animationFolderId
+        ? node
+        : node.children.map(visit).find((child) => child !== undefined)
+    const folder = visit(doc.tree)
+    // cel 只能靠名稱對應（CSP 沒有給我們穩定的 cel id），同名時沿用第一個。
+    const byName = new Map<string, number>()
+    const duplicated = new Set<string>()
+    for (const child of folder?.children ?? []) {
+      if (byName.has(child.name)) duplicated.add(child.name)
+      else byName.set(child.name, child.id)
+    }
+    const slots = Array.from({ length: timeline.frameCount }, emptySlot)
+    const missing = new Set<string>()
+    let outOfRange = 0
+    for (const key of timeline.keys) {
+      const layerId = byName.get(key.celName)
+      if (key.frame < 0 || key.frame >= slots.length) {
+        outOfRange += 1
+        continue
+      }
+      if (layerId === undefined) missing.add(key.celName)
+      else slots[key.frame] = { sourceId, layerId }
+    }
+    const ownWarnings = [...timeline.warnings]
+    if (missing.size) ownWarnings.push(`找不到這些 cel：${[...missing].join('、')}`)
+    if (duplicated.size)
+      ownWarnings.push(
+        `有同名的 cel（${[...duplicated].join('、')}），只會用到第一個，請在 CSP 改名`,
+      )
+    if (outOfRange) ownWarnings.push(`有 ${outOfRange} 個關鍵影格超出這條時間軸的長度，已忽略`)
+    warnings.push(
+      ...ownWarnings.map((warning) =>
+        timelines.length > 1 ? `${timeline.animationFolderName}：${warning}` : warning,
+      ),
+    )
+    keyCount += timeline.keys.length
+    return { ...newTrack(timeline.animationFolderName, timeline.frameCount), slots }
+  })
+  return {
+    tracks,
+    frameRate: timelines[0]!.frameRate,
+    frameCount: timelines[0]!.frameCount,
+    keyCount,
+    warnings,
   }
 }
 
@@ -563,6 +650,53 @@ export const useStore = create<State>((set, get) => ({
       ),
     )
   },
+  commitPackBatch: (input) => {
+    const state = get()
+    if (!state.project || state.project.id !== input.expectedProjectId) return false
+    const targetIndexes = new Set(input.cells.map((cell) => cell.index))
+    const replacedDocumentIds = new Set(
+      state.packCells.flatMap((cell) =>
+        targetIndexes.has(cell.index) && cell.documentId ? [cell.documentId] : [],
+      ),
+    )
+    const sources = [...state.sources]
+    for (const asset of input.assets) {
+      if (!sources.some((source) => source.id === asset.id)) sources.push(asset)
+    }
+    const docs = { ...state.docs, ...input.summaries }
+    const documents = {
+      ...state.documents,
+      [state.activeDocumentId]: captureDocumentState(state),
+      ...input.documents,
+    }
+    for (const documentId of replacedDocumentIds) delete documents[documentId]
+    let activeDocumentId = state.activeDocumentId
+    if (!documents[activeDocumentId]) {
+      activeDocumentId = documents[state.standaloneDocumentId]
+        ? state.standaloneDocumentId
+        : (Object.keys(documents)[0] ?? '')
+    }
+    if (!activeDocumentId || !documents[activeDocumentId])
+      throw new Error('批次匯入後找不到可保留的編輯文件')
+    const patch: Partial<State> = {
+      sources,
+      docs,
+      documents,
+      activeDocumentId,
+      packCells: [
+        ...state.packCells.filter((cell) => !targetIndexes.has(cell.index)),
+        ...input.cells,
+      ],
+    }
+    if (activeDocumentId !== state.activeDocumentId) {
+      Object.assign(
+        patch,
+        documentWorkingPatch({ ...state, sources, docs }, documents[activeDocumentId]!),
+      )
+    }
+    set(semanticChange(state, patch, false))
+    return true
+  },
   removeSource: (sourceId) => {
     const state = get()
     if (!state.sources.some((source) => source.id === sourceId)) return
@@ -836,38 +970,9 @@ export const useStore = create<State>((set, get) => ({
     const doc = sourceId ? state.docs[sourceId] : null
     const timeline = doc?.cspTimelines[timelineIndex]
     if (!timeline || !doc || !sourceId) return
-    const folder = (() => {
-      const visit = (node: LayerNode): LayerNode | undefined =>
-        node.id === timeline.animationFolderId
-          ? node
-          : node.children.map(visit).find((child) => child !== undefined)
-      return visit(doc.tree)
-    })()
-    // cel 只能靠名稱對應（CSP 沒有給我們穩定的 cel id），所以同名一定要講出來，
-    // 不然使用者會拿到「看起來有帶入、但對到錯的圖層」這種最難查的結果。
-    const byName = new Map<string, number>()
-    const duplicated = new Set<string>()
-    for (const child of folder?.children ?? []) {
-      if (byName.has(child.name)) duplicated.add(child.name)
-      else byName.set(child.name, child.id)
-    }
-    const slots = Array.from({ length: timeline.frameCount }, emptySlot)
-    const missing = new Set<string>()
-    let outOfRange = 0
-    for (const key of timeline.keys) {
-      const layerId = byName.get(key.celName)
-      if (key.frame < 0 || key.frame >= slots.length) {
-        outOfRange += 1
-        continue
-      }
-      if (layerId === undefined) missing.add(key.celName)
-      else slots[key.frame] = { sourceId, layerId }
-    }
-    const warnings = [...timeline.warnings]
-    if (missing.size) warnings.push(`找不到這些 cel：${[...missing].join('、')}`)
-    if (duplicated.size)
-      warnings.push(`有同名的 cel（${[...duplicated].join('、')}），只會用到第一個，請在 CSP 改名`)
-    if (outOfRange) warnings.push(`有 ${outOfRange} 個關鍵影格超出這條時間軸的長度，已忽略`)
+    const built = buildCspTracks(doc, sourceId, [timeline])
+    const slots = built.tracks[0]!.slots
+    const warnings = built.warnings
     state.commit()
     set(
       semanticChange(state, {
@@ -882,7 +987,7 @@ export const useStore = create<State>((set, get) => ({
                 ),
               },
         ),
-        fps: timeline.frameRate,
+        fps: built.frameRate,
         selectedSlot: 0,
         playhead: 0,
         playing: false,

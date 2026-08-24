@@ -1,5 +1,5 @@
 import type { Bitmap } from '../clip/offscreen.js'
-import type { CspTimeline } from '../clip/timeline.js'
+import type { CspTimeline, CspTimelineGroup } from '../clip/timeline.js'
 
 export type { Bitmap }
 
@@ -22,6 +22,7 @@ export interface SourceDocument {
   flat: Map<number, SourceLayer>
   timeline: { frameRate: number; startFrame: number; endFrame: number; name: string } | null
   cspTimelines: CspTimeline[]
+  cspTimelineGroups: CspTimelineGroup[]
   renderNode(layerId: number, overrides?: Map<number, boolean>): Bitmap
 }
 

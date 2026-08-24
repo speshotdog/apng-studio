@@ -9,13 +9,53 @@
  *    看起來就像「選單壞掉不能點」。從貼圖組跳回編輯畫面就會踩到這條。
  */
 export interface DialogRequest {
-  kind: 'text' | 'confirm'
+  kind: 'text' | 'confirm' | 'choice' | 'notice'
   title: string
   message?: string
   value: string
   placeholder?: string
   confirmLabel: string
+  choices?: Array<{ label: string; value: string; primary?: boolean }>
   resolve: (value: string | null) => void
+}
+
+export function askChoice(
+  title: string,
+  message: string,
+  choices: Array<{ label: string; value: string; primary?: boolean }>,
+): Promise<string | null> {
+  current?.resolve(null)
+  return new Promise((resolve) => {
+    emit({
+      kind: 'choice',
+      title,
+      message,
+      value: '',
+      confirmLabel: '',
+      choices,
+      resolve: (answer) => {
+        emit(null)
+        resolve(answer)
+      },
+    })
+  })
+}
+
+export function showNotice(title: string, message: string): Promise<void> {
+  current?.resolve(null)
+  return new Promise((resolve) => {
+    emit({
+      kind: 'notice',
+      title,
+      message,
+      value: '',
+      confirmLabel: '關閉',
+      resolve: () => {
+        emit(null)
+        resolve()
+      },
+    })
+  })
 }
 
 type Listener = (request: DialogRequest | null) => void
