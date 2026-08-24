@@ -44,6 +44,7 @@ function newPackDocument(state: State) {
     mergeIdentical: state.mergeIdentical,
     staticFrame: 0,
     gifColors: state.gifColors,
+    gifMatte: state.gifMatte,
     activeSourceId: state.activeSourceId ?? undefined,
     contentRevision: 0,
   })

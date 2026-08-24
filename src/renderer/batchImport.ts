@@ -92,6 +92,7 @@ export function buildBatchDocuments(
       mergeIdentical: state.mergeIdentical,
       staticFrame: 0,
       gifColors: state.gifColors,
+      gifMatte: state.gifMatte,
       activeSourceId: asset.id,
       contentRevision: 0,
     })

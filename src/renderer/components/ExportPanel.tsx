@@ -14,6 +14,15 @@ import { TagEditor } from './TagEditor.js'
 const clampFps = (value: number): number =>
   Math.max(1, Math.min(60, Number.isFinite(value) ? Math.round(value) : 1))
 
+type GifMatteChoice = 'none' | 'dark' | 'white' | 'custom'
+
+const gifMatteChoice = (value: string | null): GifMatteChoice => {
+  if (value === null) return 'none'
+  if (value.toLowerCase() === '#1e1e1e') return 'dark'
+  if (value.toLowerCase() === '#ffffff') return 'white'
+  return 'custom'
+}
+
 export function ExportPanel(props: {
   settings: PublicSettings | null
   openSettings: () => void
@@ -89,6 +98,7 @@ export function ExportPanel(props: {
       scaleMode,
       staticFrame: state.staticFrame,
       gifColors: state.gifColors,
+      gifMatte: state.gifMatte,
       zoom: track.zoom,
       offsetX: track.offsetX,
       offsetY: track.offsetY,
@@ -122,6 +132,7 @@ export function ExportPanel(props: {
       scaleMode: 'smooth',
       staticFrame: next.staticOnly ? state.playhead : 0,
       gifColors: 256,
+      gifMatte: null,
       // 噗浪只有 48×48，整張縮進去會看不清楚，預設先放大到「填滿」的程度讓人裁。
       zoom:
         target === 'plurkEmoticon' && doc
@@ -260,6 +271,7 @@ export function ExportPanel(props: {
       const encoded = encodeGif(frames, payload.width, payload.height, {
         numPlays: payload.numPlays,
         maxColors: payload.gif?.maxColors ?? 256,
+        matte: payload.gif?.matte ?? null,
       })
       setUpload({ bytes: encoded.bytes, tags: [] })
     } catch (error) {
@@ -575,18 +587,58 @@ export function ExportPanel(props: {
           </div>
         )}
         {format === 'gif' && (
-          <div className="section grid">
-            <label>
-              最大色數
-              <input
-                type="number"
-                min="2"
-                max="256"
-                value={state.gifColors}
-                onChange={(e) => set({ gifColors: Number(e.target.value) })}
-              />
-            </label>
-            <label>GIF 使用固定調色盤量化</label>
+          <div className="section gif-settings">
+            <div className="gif-setting-grid">
+              <label>
+                最大色數
+                <input
+                  type="number"
+                  min="2"
+                  max="256"
+                  value={state.gifColors}
+                  onChange={(e) => set({ gifColors: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                邊緣底色
+                <span className="gif-matte-control">
+                  <select
+                    aria-label="GIF 邊緣底色"
+                    value={gifMatteChoice(state.gifMatte)}
+                    onChange={(event) => {
+                      const choice = event.target.value as GifMatteChoice
+                      set({
+                        gifMatte:
+                          choice === 'none'
+                            ? null
+                            : choice === 'dark'
+                              ? '#1e1e1e'
+                              : choice === 'white'
+                                ? '#ffffff'
+                                : '#808080',
+                      })
+                    }}
+                  >
+                    <option value="none">無</option>
+                    <option value="dark">深色</option>
+                    <option value="white">白色</option>
+                    <option value="custom">自訂</option>
+                  </select>
+                  {gifMatteChoice(state.gifMatte) === 'custom' && (
+                    <input
+                      aria-label="自訂 GIF 邊緣底色"
+                      type="color"
+                      value={state.gifMatte ?? '#808080'}
+                      onChange={(event) => set({ gifMatte: event.target.value.toLowerCase() })}
+                    />
+                  )}
+                </span>
+              </label>
+            </div>
+            <small>GIF 使用固定調色盤量化</small>
+            <small>
+              半透明邊緣會預先混入這個顏色，避免在深淺背景上出現亮邊／暗邊（GIPHY 版面是深色）
+            </small>
           </div>
         )}
         <div className="stats">

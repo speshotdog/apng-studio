@@ -27,6 +27,7 @@ const DEFAULTS = {
   mergeIdentical: true,
   staticFrame: 0,
   gifColors: 256,
+  gifMatte: null,
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -49,6 +50,12 @@ function sourceArray(value: unknown): SourceAsset[] {
       ? [{ id: source.id, path: source.path, name: String(source.name ?? sourceName(source.path)) }]
       : []
   })
+}
+
+function gifMatte(value: unknown): string | null {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+    ? value.toLowerCase()
+    : DEFAULTS.gifMatte
 }
 
 function cloneTrack(track: StoredTrack): StoredTrack {
@@ -99,6 +106,7 @@ function editorState(value: unknown): EditorState {
       typeof state.mergeIdentical === 'boolean' ? state.mergeIdentical : DEFAULTS.mergeIdentical,
     staticFrame: typeof state.staticFrame === 'number' ? state.staticFrame : DEFAULTS.staticFrame,
     gifColors: typeof state.gifColors === 'number' ? state.gifColors : DEFAULTS.gifColors,
+    gifMatte: gifMatte(state.gifMatte),
   }
 }
 
@@ -218,6 +226,7 @@ function toEditorDocument(
     mergeIdentical: stored.mergeIdentical,
     staticFrame: stored.staticFrame ?? DEFAULTS.staticFrame,
     gifColors: stored.gifColors ?? DEFAULTS.gifColors,
+    gifMatte: stored.gifMatte ?? DEFAULTS.gifMatte,
     activeSourceId: fallbackSourceId,
     contentRevision: 0,
   }
@@ -388,6 +397,7 @@ export function normalizeProjectBlob(
           visibility: remapVisibility(document.visibility, ids),
           activeSourceId: ids.get(document.activeSourceId ?? '') ?? document.activeSourceId,
           contentRevision: document.contentRevision ?? 0,
+          gifMatte: gifMatte(document.gifMatte),
         },
       ],
     ),

@@ -296,6 +296,7 @@ function encodeExport(payload: ExportPayload): {
   const result = encodeGif(payload.frames, payload.width, payload.height, {
     numPlays: payload.numPlays,
     maxColors: payload.gif?.maxColors ?? 256,
+    matte: payload.gif?.matte ?? null,
   })
   return { bytes: result.bytes, warnings: result.warnings, byteLength: result.bytes.length }
 }
@@ -307,7 +308,10 @@ function encodeTwitchFile(payload: ExportPayload): ReturnType<typeof encodeExpor
     return encoded
   for (const colors of [128, 64, 32]) {
     if (payload.format === 'gif') {
-      encoded = encodeExport({ ...payload, gif: { maxColors: colors } })
+      encoded = encodeExport({
+        ...payload,
+        gif: { maxColors: colors, matte: payload.gif?.matte ?? null },
+      })
     } else {
       const frame = payload.frames[0]
       if (!frame) break

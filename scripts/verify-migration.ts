@@ -37,6 +37,7 @@ const state = (
   mergeIdentical: true,
   staticFrame: 0,
   gifColors: 128,
+  gifMatte: '#1e1e1e',
 })
 
 const topA = { id: 'top-a', path: 'D:\\art\\A.clip', name: 'A.clip' }
@@ -94,6 +95,7 @@ assert.deepEqual(
   [topA.path, topB.path, editorC.path],
 )
 assert(migrated.editorDocuments[migrated.standaloneDocumentId], 'standalone document 必須存在')
+assert.equal(migrated.editorDocuments[migrated.standaloneDocumentId]!.gifMatte, '#1e1e1e')
 
 const documentCells = migrated.pack!.cells.filter((cell) => cell.kind === 'document')
 assert.equal(documentCells.length, 2)
@@ -133,6 +135,18 @@ assert.deepEqual(
   '連續兩次 round-trip 仍不得重建 documentId',
 )
 
+const oldV2 = JSON.parse(saved) as Record<string, unknown>
+for (const document of Object.values(
+  oldV2.editorDocuments as Record<string, Record<string, unknown>>,
+)) {
+  delete document.gifMatte
+}
+const upgradedV2 = normalizeProjectBlob(oldV2, createId)
+assert(
+  Object.values(upgradedV2.editorDocuments).every((document) => document.gifMatte === null),
+  '舊 v2 文件缺少 gifMatte 時必須補 null',
+)
+
 // v0.1 可能只有頂層 slots，素材路徑仍放在 ProjectMeta；也必須能升級。
 const v01 = normalizeProjectBlob(
   {
@@ -162,5 +176,6 @@ assert.equal(v01Document.tracks[0]!.zoom, 1.75)
 assert.equal(v01Document.tracks[0]!.offsetX, 8)
 assert.equal(v01Document.tracks[0]!.offsetY, -20)
 assert.equal(v01Document.tracks.length, 1, '無 tracks 的 v0.1 格式必須建立單一 v2 軌道')
+assert.equal(v01Document.gifMatte, null, '舊版文件必須補預設 gifMatte=null')
 
 console.log('Migration verification passed')

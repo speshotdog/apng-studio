@@ -20,6 +20,12 @@ const { GIFEncoder, applyPalette, quantize } = gifenc
 export interface GifOptions {
   numPlays: number
   maxColors: number
+  matte?: GifMatte | null
+}
+export interface GifMatte {
+  r: number
+  g: number
+  b: number
 }
 export interface GifResult {
   bytes: Uint8Array
@@ -40,6 +46,14 @@ export function encodeGif(
     throw new Error('GIF 色彩數必須介於 2–256')
   if (!Number.isInteger(opts.numPlays) || opts.numPlays < 0)
     throw new Error('播放次數必須是非負整數')
+  const matte = opts.matte ?? null
+  if (
+    matte &&
+    ![matte.r, matte.g, matte.b].every(
+      (channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255,
+    )
+  )
+    throw new Error('GIF 邊緣底色必須是 0–255 的 RGB 整數')
   const pixelLength = width * height * 4
   const gif = GIFEncoder()
   const actualDelaysMs = frames.map((frame) => Math.round(frame.delayMs / 10) * 10)
@@ -54,13 +68,21 @@ export function encodeGif(
     const rgba = new Uint8Array(frame.rgba)
     let hasTransparency = false
     for (let i = 0; i < rgba.length; i += 4) {
-      if (rgba[i + 3]! < 128) {
+      const alpha = rgba[i + 3]!
+      if (alpha < (matte ? 26 : 128)) {
         rgba[i] = 0
         rgba[i + 1] = 0
         rgba[i + 2] = 0
         rgba[i + 3] = 0
         hasTransparency = true
       } else {
+        if (matte) {
+          const sourceWeight = alpha / 255
+          const matteWeight = 1 - sourceWeight
+          rgba[i] = Math.round(rgba[i]! * sourceWeight + matte.r * matteWeight)
+          rgba[i + 1] = Math.round(rgba[i + 1]! * sourceWeight + matte.g * matteWeight)
+          rgba[i + 2] = Math.round(rgba[i + 2]! * sourceWeight + matte.b * matteWeight)
+        }
         rgba[i + 3] = 255
       }
     }

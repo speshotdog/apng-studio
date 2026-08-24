@@ -11,6 +11,7 @@ import { useStore } from './state/store.js'
 import { EXPORT_TARGETS } from '../codec/line.js'
 import { frameDelays, mergeAdjacentIdenticalFrames } from '../codec/timing.js'
 import { captureEditorDocument } from './snapshot.js'
+import type { GifMatte } from '../codec/gif.js'
 
 export type ExportDocumentSnapshot = DocumentComposeSnapshot
 
@@ -32,6 +33,17 @@ const browserBitmapLoader: BitmapLoader = {
     window.api.renderLayer(filePath, layerId, overrides),
   createBitmap: (value) =>
     createImageBitmap(bitmapToImageData(value.rgba, value.width, value.height)),
+}
+
+function parseGifMatte(value: string | null): GifMatte | null {
+  if (value === null) return null
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value)
+  if (!match) throw new Error('GIF 邊緣底色格式不正確')
+  return {
+    r: Number.parseInt(match[1]!, 16),
+    g: Number.parseInt(match[2]!, 16),
+    b: Number.parseInt(match[3]!, 16),
+  }
 }
 
 export async function createExportPayloadFromSnapshot(
@@ -67,7 +79,7 @@ export async function createExportPayloadFromSnapshot(
     frames,
     numPlays: document.playCount,
     mergeIdentical: document.mergeIdentical,
-    gif: { maxColors: document.gifColors },
+    gif: { maxColors: document.gifColors, matte: parseGifMatte(document.gifMatte) },
   }
 }
 

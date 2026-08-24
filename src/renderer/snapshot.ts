@@ -24,6 +24,7 @@ function persisted(document: DocumentState): EditorDocument {
     mergeIdentical: document.mergeIdentical,
     staticFrame: document.staticFrame,
     gifColors: document.gifColors,
+    gifMatte: document.gifMatte,
     activeSourceId: document.activeSourceId,
     contentRevision: document.contentRevision,
   }
@@ -82,6 +83,7 @@ export function applyEditorState(stored: EditorDocument): void {
     mergeIdentical: next.mergeIdentical,
     staticFrame: next.staticFrame,
     gifColors: next.gifColors,
+    gifMatte: next.gifMatte,
     activeSourceId: next.activeSourceId ?? null,
     doc: next.activeSourceId ? (state.docs[next.activeSourceId] ?? null) : null,
     contentRevision: next.contentRevision,

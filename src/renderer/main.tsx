@@ -76,7 +76,8 @@ if (import.meta.env.DEV || new URLSearchParams(location.search).has('smoke')) {
       const payload = await createExportPayload()
       return encodeGif(payload.frames, payload.width, payload.height, {
         numPlays: payload.numPlays,
-        maxColors: 256,
+        maxColors: payload.gif?.maxColors ?? 256,
+        matte: payload.gif?.matte ?? null,
       }).bytes.length
     },
     // 影格與畫面調整改成掛在軌道上；煙霧測試沿用單軌語意，靠這幾個小工具轉接。

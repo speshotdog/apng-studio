@@ -47,6 +47,7 @@ export type TargetSettings = Pick<
 > & {
   staticFrame: number
   gifColors: number
+  gifMatte: string | null
   zoom: number
   offsetX: number
   offsetY: number
@@ -112,6 +113,7 @@ export interface State {
   playing: boolean
   playhead: number
   gifColors: number
+  gifMatte: string | null
   targetSettings: Partial<Record<ExportTarget, TargetSettings>>
   mode: 'animation' | 'pack'
   packTarget: ExportTarget
@@ -306,6 +308,7 @@ const DOCUMENT_KEYS: ReadonlyArray<keyof State> = [
   'scaleMode',
   'mergeIdentical',
   'gifColors',
+  'gifMatte',
   'staticFrame',
   'lockAspect',
   'visibility',
@@ -345,6 +348,7 @@ export function captureDocumentState(state: State): DocumentState {
     mergeIdentical: state.mergeIdentical,
     staticFrame: state.staticFrame,
     gifColors: state.gifColors,
+    gifMatte: state.gifMatte,
     activeSourceId: state.activeSourceId ?? undefined,
     contentRevision: state.contentRevision,
     activeTrack: state.activeTrack,
@@ -399,6 +403,7 @@ function documentWorkingPatch(state: State, document: DocumentState): Partial<St
     mergeIdentical: document.mergeIdentical,
     staticFrame: document.staticFrame,
     gifColors: document.gifColors,
+    gifMatte: document.gifMatte,
     activeSourceId,
     doc: activeSourceId ? (state.docs[activeSourceId] ?? null) : null,
     contentRevision: document.contentRevision,
@@ -456,6 +461,7 @@ const makeInitial = () => ({
   playing: false,
   playhead: 0,
   gifColors: 256,
+  gifMatte: null as string | null,
   targetSettings: {},
   mode: 'animation' as const,
   packTarget: 'staticSticker' as ExportTarget,
@@ -534,6 +540,7 @@ export const useStore = create<State>((set, get) => ({
       mergeIdentical: initial.mergeIdentical,
       staticFrame: initial.staticFrame,
       gifColors: initial.gifColors,
+      gifMatte: initial.gifMatte,
       activeSourceId: asset.id,
       contentRevision: 0,
     })

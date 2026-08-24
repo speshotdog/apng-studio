@@ -840,6 +840,35 @@ select {
   display: grid;
   gap: 4px;
 }
+.gif-settings {
+  display: grid;
+  gap: 7px;
+}
+.gif-setting-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.gif-setting-grid > label {
+  display: grid;
+  gap: 4px;
+}
+.gif-matte-control {
+  display: flex;
+  gap: 6px;
+}
+.gif-matte-control select {
+  min-width: 0;
+  flex: 1;
+}
+.gif-matte-control input[type='color'] {
+  width: 34px;
+  padding: 2px;
+}
+.gif-settings small {
+  color: var(--muted);
+  line-height: 1.45;
+}
 .stats {
   margin: 12px 16px;
   border: 1px solid var(--edge);

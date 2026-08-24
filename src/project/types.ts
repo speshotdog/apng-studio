@@ -39,6 +39,7 @@ export interface EditorState {
   mergeIdentical: boolean
   staticFrame?: number
   gifColors?: number
+  gifMatte?: string | null
 }
 
 /** v2 的可編輯文件；素材只以 sourceId 引用專案層 sources。 */
@@ -56,6 +57,7 @@ export interface EditorDocument {
   mergeIdentical: boolean
   staticFrame: number
   gifColors: number
+  gifMatte: string | null
   activeSourceId?: string
   contentRevision: number
 }

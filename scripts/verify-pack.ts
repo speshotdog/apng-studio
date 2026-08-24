@@ -99,6 +99,7 @@ const editorDocument = (name: string, fps: number): EditorDocument => ({
   mergeIdentical: true,
   staticFrame: 0,
   gifColors: 256,
+  gifMatte: null,
   contentRevision: 0,
 })
 

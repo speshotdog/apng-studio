@@ -1,4 +1,5 @@
 import type { ApngInfo } from '../codec/apng.js'
+import type { GifMatte } from '../codec/gif.js'
 import type {
   BatchFolderScanResult,
   PackImportResult,
@@ -45,7 +46,7 @@ export interface ExportPayload {
   frames: { rgba: Uint8Array; delayMs: number }[]
   numPlays: number
   mergeIdentical: boolean
-  gif?: { maxColors: number }
+  gif?: { maxColors: number; matte: GifMatte | null }
 }
 export interface ExportResult {
   ok: boolean

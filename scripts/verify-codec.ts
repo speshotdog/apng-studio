@@ -123,6 +123,7 @@ const editorDocument = (id: string, fps: number): EditorDocument => ({
   mergeIdentical: true,
   staticFrame: 0,
   gifColors: 256,
+  gifMatte: null,
   activeSourceId: sourceId,
   contentRevision: 0,
 })
@@ -161,6 +162,12 @@ useStore.getState().switchDocument('b')
 assert.equal(useStore.getState().fps, 25)
 useStore.getState().undo()
 assert.equal(useStore.getState().fps, 24)
+const beforeMatteRevision = useStore.getState().projectRevision
+const beforeMatteContentRevision = useStore.getState().contentRevision
+useStore.getState().set({ gifMatte: '#1e1e1e' })
+assert.equal(useStore.getState().projectRevision, beforeMatteRevision + 1)
+assert.equal(useStore.getState().contentRevision, beforeMatteContentRevision + 1)
+assert.equal(useStore.getState().dirty, true, '變更 gifMatte 必須標記文件為未儲存')
 
 const merged = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: true })
 const noMerge = encodeApng(frames, width, height, { numPlays: 4, mergeIdentical: false })
@@ -446,6 +453,164 @@ const timeoutFetch: typeof fetch = (_input, init) =>
   )
 const timedOut = await uploadToGiphy(fakeGif, '', 'fake-key', '', timeoutFetch, 1)
 assert.match(timedOut.error ?? '', /逾時/)
+
+function decodeGifLzw(data: Uint8Array, minimumCodeSize: number): number[] {
+  const clearCode = 1 << minimumCodeSize
+  const endCode = clearCode + 1
+  let codeSize = minimumCodeSize + 1
+  let bitOffset = 0
+  let dictionary: number[][] = []
+  const reset = (): void => {
+    dictionary = Array.from({ length: clearCode }, (_, index) => [index])
+    dictionary.push([], [])
+    codeSize = minimumCodeSize + 1
+  }
+  const readCode = (): number => {
+    let code = 0
+    for (let bit = 0; bit < codeSize; bit++) {
+      const byte = data[bitOffset >> 3]
+      if (byte === undefined) throw new Error('GIF LZW 資料提前結束')
+      code |= ((byte >> (bitOffset & 7)) & 1) << bit
+      bitOffset++
+    }
+    return code
+  }
+
+  reset()
+  const output: number[] = []
+  let previous: number[] | null = null
+  while (bitOffset + codeSize <= data.length * 8) {
+    const code = readCode()
+    if (code === clearCode) {
+      reset()
+      previous = null
+      continue
+    }
+    if (code === endCode) break
+    const entry: number[] | null =
+      code < dictionary.length
+        ? dictionary[code]!
+        : code === dictionary.length && previous
+          ? [...previous, previous[0]!]
+          : null
+    if (!entry?.length) throw new Error(`GIF LZW 代碼 ${code} 無法解析`)
+    output.push(...entry)
+    if (previous) {
+      dictionary.push([...previous, entry[0]!])
+      if (dictionary.length === 1 << codeSize && codeSize < 12) codeSize++
+    }
+    previous = entry
+  }
+  return output
+}
+
+function inspectGifFrame(bytes: Uint8Array): {
+  palette: number[][]
+  indexes: number[]
+  transparentIndexes: number[]
+} {
+  assert.equal(new TextDecoder().decode(bytes.subarray(0, 6)), 'GIF89a')
+  const logicalPacked = bytes[10]!
+  assert(logicalPacked & 0x80, '測試 GIF 必須有全域調色盤')
+  const globalColors = 1 << ((logicalPacked & 0x07) + 1)
+  let offset = 13
+  const globalPalette = Array.from({ length: globalColors }, () => {
+    const color = [bytes[offset]!, bytes[offset + 1]!, bytes[offset + 2]!]
+    offset += 3
+    return color
+  })
+  const transparentIndexes: number[] = []
+  while (offset < bytes.length) {
+    const marker = bytes[offset++]!
+    if (marker === 0x3b) break
+    if (marker === 0x21) {
+      const label = bytes[offset++]!
+      if (label === 0xf9) {
+        assert.equal(bytes[offset++]!, 4)
+        const packed = bytes[offset]!
+        if (packed & 1) transparentIndexes.push(bytes[offset + 3]!)
+        offset += 4
+        assert.equal(bytes[offset++]!, 0)
+      } else {
+        while (true) {
+          const blockLength = bytes[offset++]!
+          if (blockLength === 0) break
+          offset += blockLength
+        }
+      }
+      continue
+    }
+    if (marker !== 0x2c) throw new Error(`未知 GIF 區塊 0x${marker.toString(16)}`)
+    const imagePacked = bytes[offset + 8]!
+    offset += 9
+    let palette = globalPalette
+    if (imagePacked & 0x80) {
+      const localColors = 1 << ((imagePacked & 0x07) + 1)
+      palette = Array.from({ length: localColors }, () => {
+        const color = [bytes[offset]!, bytes[offset + 1]!, bytes[offset + 2]!]
+        offset += 3
+        return color
+      })
+    }
+    const minimumCodeSize = bytes[offset++]!
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const blockLength = bytes[offset++]!
+      if (blockLength === 0) break
+      const chunk = bytes.subarray(offset, offset + blockLength)
+      chunks.push(chunk)
+      total += chunk.length
+      offset += blockLength
+    }
+    const compressed = new Uint8Array(total)
+    let target = 0
+    for (const chunk of chunks) {
+      compressed.set(chunk, target)
+      target += chunk.length
+    }
+    return { palette, indexes: decodeGifLzw(compressed, minimumCodeSize), transparentIndexes }
+  }
+  throw new Error('GIF 沒有影像區塊')
+}
+
+const edgeFrame: ApngFrame = {
+  rgba: new Uint8Array([255, 255, 255, 128, 12, 34, 56, 10]),
+  delayMs: 100,
+}
+const plainEdge = inspectGifFrame(
+  encodeGif([edgeFrame], 2, 1, { numPlays: 1, maxColors: 256, matte: null }).bytes,
+)
+const darkEdge = inspectGifFrame(
+  encodeGif([edgeFrame], 2, 1, {
+    numPlays: 1,
+    maxColors: 256,
+    matte: { r: 30, g: 30, b: 30 },
+  }).bytes,
+)
+const decodedPixel = (
+  inspected: ReturnType<typeof inspectGifFrame>,
+  pixel: number,
+): [number, number, number, number] => {
+  const index = inspected.indexes[pixel]!
+  if (index === inspected.transparentIndexes[0]) return [0, 0, 0, 0]
+  const color = inspected.palette[index]!
+  return [color[0]!, color[1]!, color[2]!, 255]
+}
+assert.deepEqual(decodedPixel(plainEdge, 0), [255, 255, 255, 255])
+assert.deepEqual(decodedPixel(plainEdge, 1), [0, 0, 0, 0])
+assert.deepEqual(decodedPixel(darkEdge, 0), [143, 143, 143, 255])
+assert.deepEqual(decodedPixel(darkEdge, 1), [0, 0, 0, 0])
+for (const inspected of [plainEdge, darkEdge]) {
+  assert.equal(inspected.transparentIndexes.length, 1, '每幀只應宣告一個透明索引')
+  const transparentIndex = inspected.transparentIndexes[0]!
+  assert(inspected.palette[transparentIndex], '透明索引必須存在於調色盤')
+  assert.equal(
+    inspected.indexes.filter((index) => index === transparentIndex).length,
+    1,
+    '只有低 alpha 像素可使用透明索引',
+  )
+}
 
 const gif = encodeGif(frames, width, height, { numPlays: 4, maxColors: 256 })
 assert.equal(new TextDecoder().decode(gif.bytes.subarray(0, 6)), 'GIF89a')

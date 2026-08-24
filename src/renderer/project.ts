@@ -154,6 +154,7 @@ export async function applyBlob(blob: ProjectBlob): Promise<void> {
     mergeIdentical: document.mergeIdentical,
     staticFrame: document.staticFrame,
     gifColors: document.gifColors,
+    gifMatte: document.gifMatte,
     activeSourceId,
     doc: activeSourceId ? (current.docs[activeSourceId] ?? null) : null,
     contentRevision: document.contentRevision,
