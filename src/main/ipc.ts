@@ -1,4 +1,4 @@
-import { dialog, ipcMain, shell, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, Menu, shell, type BrowserWindow } from 'electron'
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import JSZip from 'jszip'
@@ -18,6 +18,7 @@ import type {
   DraftListing,
   ExportPayload,
   ExportResult,
+  FrameContextAction,
   LayerNode,
   PackEncoded,
 } from '../preload/api.js'
@@ -364,6 +365,30 @@ async function writeMultiExport(
   }
 }
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
+  ipcMain.handle(
+    'timeline:frameContextMenu',
+    (_event, targetCount: number): Promise<FrameContextAction | null> => {
+      if (!Number.isInteger(targetCount) || targetCount < 1)
+        throw new Error('影格右鍵選單的目標格數無效')
+      const window = getWindow()
+      if (!window) throw new Error('找不到可顯示影格右鍵選單的視窗')
+      const label = targetCount > 1 ? `這 ${targetCount} 格` : '這格'
+      return new Promise((resolve) => {
+        let resolved = false
+        const finish = (action: FrameContextAction | null): void => {
+          if (resolved) return
+          resolved = true
+          resolve(action)
+        }
+        Menu.buildFromTemplate([
+          { label: `清除${label}並延續前格`, click: () => finish('clear-and-continue') },
+          { label: '固定目前延續影格', click: () => finish('freeze') },
+          { label: '在後面插入一格（所有圖層）', click: () => finish('insert') },
+          { label: `刪除${label}（所有圖層）`, click: () => finish('delete') },
+        ]).popup({ window, callback: () => finish(null) })
+      })
+    },
+  )
   ipcMain.handle('settings:get', () => getPublicSettings())
   ipcMain.handle('settings:setGiphy', (_event, key: string, username: string) =>
     setGiphy(key, username),

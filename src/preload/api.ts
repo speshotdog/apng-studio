@@ -58,6 +58,7 @@ export interface PublicSettings {
 }
 export type MenuCommand =
   'open' | 'new' | 'drafts' | 'save' | 'projects' | 'export-apng' | 'export-gif' | 'settings'
+export type FrameContextAction = 'clear-and-continue' | 'freeze' | 'insert' | 'delete'
 /** 草稿資料夾裡的一個可開啟檔案。 */
 export interface DraftEntry {
   filePath: string
@@ -146,6 +147,7 @@ export interface Api {
   setProgressExpanded(expanded: boolean): Promise<void>
   uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
   openExternal(url: string): Promise<void>
+  showFrameContextMenu(targetCount: number): Promise<FrameContextAction | null>
   setDirty(dirty: boolean): void
   onMenuCommand(callback: (command: MenuCommand) => void): () => void
 }

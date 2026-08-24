@@ -39,6 +39,8 @@ const api: Api = {
   setProgressExpanded: (expanded) => ipcRenderer.invoke('settings:setProgressExpanded', expanded),
   uploadGiphy: (payload) => ipcRenderer.invoke('giphy:upload', payload),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  showFrameContextMenu: (targetCount) =>
+    ipcRenderer.invoke('timeline:frameContextMenu', targetCount),
   setDirty: (dirty) => ipcRenderer.send('window:dirty', dirty),
   onMenuCommand: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, command: MenuCommand) => callback(command)

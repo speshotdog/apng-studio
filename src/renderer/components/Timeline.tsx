@@ -27,7 +27,6 @@ export function Timeline(): React.JSX.Element {
   const { doc, tracks, activeTrack, selection, selectedSlot, playhead, playing, set } = state
   const track = tracks[activeTrack] ?? tracks[0]!
   const frames = state.frameCount()
-  const [menu, setMenu] = useState<{ x: number; y: number; index: number } | null>(null)
   const [timelineMenu, setTimelineMenu] = useState(false)
   const [marquee, setMarquee] = useState<Marquee | null>(null)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -50,11 +49,12 @@ export function Timeline(): React.JSX.Element {
 
   /** 插入／刪除影格要動到所有軌道，不然時間軸會對不齊。 */
   const spliceAll = (at: number, remove: number[], insert: number): void => {
-    state.commit()
-    const total = tracks[0]?.slots.length ?? 0
+    const current = useStore.getState()
+    current.commit()
+    const total = current.tracks[0]?.slots.length ?? 0
     const target = Math.max(0, Math.min(at, total - remove.length + insert))
-    set({
-      tracks: tracks.map((t) => {
+    current.set({
+      tracks: current.tracks.map((t) => {
         const kept = t.slots.filter((_, i) => !remove.includes(i))
         const next = kept.length ? kept : [emptySlot()]
         if (!insert) return { ...t, slots: next }
@@ -65,6 +65,35 @@ export function Timeline(): React.JSX.Element {
       selection: [],
       // 插入之後游標停在新的那一格，才能接著把圖層拖進去。
       ...(insert ? { selectedSlot: target, playhead: target, playing: false } : {}),
+    })
+  }
+
+  const showFrameContextMenu = async (index: number, trackIndex: number): Promise<void> => {
+    const targets = selection.includes(index) && selection.length ? selection : [index]
+    const action = await window.api.showFrameContextMenu(targets.length)
+    if (!action) return
+    if (action === 'insert') {
+      spliceAll(index + 1, [], 1)
+      return
+    }
+    if (action === 'delete') {
+      spliceAll(0, targets, 0)
+      return
+    }
+    const current = useStore.getState()
+    current.commit()
+    current.set({
+      tracks: current.tracks.map((item, itemIndex) => {
+        if (itemIndex !== trackIndex) return item
+        return {
+          ...item,
+          slots: item.slots.map((slot, slotIndex) => {
+            if (!targets.includes(slotIndex)) return slot
+            if (action === 'clear-and-continue') return emptySlot()
+            return current.resolveSlot(slotIndex, trackIndex) ?? emptySlot()
+          }),
+        }
+      }),
     })
   }
 
@@ -251,7 +280,7 @@ export function Timeline(): React.JSX.Element {
                   onContextMenu={(event) => {
                     event.preventDefault()
                     if (!isActive) set({ activeTrack: trackIndex })
-                    setMenu({ x: event.clientX, y: event.clientY, index })
+                    void showFrameContextMenu(index, trackIndex)
                   }}
                   draggable={slot.layerId !== null || selected}
                   onDragStart={(event) => {
@@ -381,7 +410,7 @@ export function Timeline(): React.JSX.Element {
           帶入 CSP 時間軸
         </button>
         {timelineMenu && (
-          <div className="context timeline-picker">
+          <div className="timeline-picker">
             {timelines.map((timeline, index) => (
               <button
                 key={`${timeline.animationFolderId}-${index}`}
@@ -404,61 +433,6 @@ export function Timeline(): React.JSX.Element {
             height: Math.abs(marquee.y1 - marquee.y0),
           }}
         />
-      )}
-      {menu && (
-        <div
-          className="context"
-          style={{ left: menu.x, top: menu.y }}
-          onMouseLeave={() => setMenu(null)}
-        >
-          {(() => {
-            const targets =
-              selection.includes(menu.index) && selection.length ? selection : [menu.index]
-            const label = targets.length > 1 ? `這 ${targets.length} 格` : '這格'
-            return (
-              <>
-                <button
-                  onClick={() => {
-                    patchActive(
-                      track.slots.map((slot, i) => (targets.includes(i) ? emptySlot() : slot)),
-                    )
-                    setMenu(null)
-                  }}
-                >
-                  清除{label}並延續前格
-                </button>
-                <button
-                  onClick={() => {
-                    patchActive(
-                      track.slots.map((slot, i) =>
-                        targets.includes(i) ? (state.resolveSlot(i) ?? emptySlot()) : slot,
-                      ),
-                    )
-                    setMenu(null)
-                  }}
-                >
-                  固定目前延續影格
-                </button>
-                <button
-                  onClick={() => {
-                    spliceAll(menu.index + 1, [], 1)
-                    setMenu(null)
-                  }}
-                >
-                  在後面插入一格（所有圖層）
-                </button>
-                <button
-                  onClick={() => {
-                    spliceAll(0, targets, 0)
-                    setMenu(null)
-                  }}
-                >
-                  刪除{label}（所有圖層）
-                </button>
-              </>
-            )
-          })()}
-        </div>
       )}
     </section>
   )

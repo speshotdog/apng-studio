@@ -23,13 +23,12 @@ function textValue(value: unknown): string {
   if (typeof value === 'string') return value
   return value instanceof Uint8Array ? Buffer.from(value).toString('utf8') : ''
 }
-function find(node: BincNode, name: string): BincNode | undefined {
-  if (node.name === name) return node
+function findAll(node: BincNode, name: string): BincNode[] {
+  const results = node.name === name ? [node] : []
   for (const child of node.children) {
-    const result = find(child, name)
-    if (result) return result
+    results.push(...findAll(child, name))
   }
-  return undefined
+  return results
 }
 function findCurve(node: BincNode): BincNode | undefined {
   if (node.name === 'FCurve' && node.attrs.Type === 'ImageCelName') return node
@@ -38,6 +37,10 @@ function findCurve(node: BincNode): BincNode | undefined {
     if (result) return result
   }
   return undefined
+}
+function childNumber(node: BincNode, name: string): number | undefined {
+  const value = node.children.find((child) => child.name === name)?.value
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 /** 影格數的上限。CSP 允許很長的時間軸，但我們的影格軌撐不住也沒意義。 */
@@ -99,29 +102,63 @@ export function readCspTimelines(db: Database, chunks: Map<string, Buffer>): Csp
           throw new Error(`時間軸壓縮長度不符：${compressedLength}/${packed.length - 4}`)
         const root = parseBinc(inflateSync(packed.subarray(4)))
         const warnings: string[] = []
-        const rateNode = find(root, 'TimeInfo')?.children.find((child) => child.name === 'Rate')
-        let curveRate = typeof rateNode?.value === 'number' ? rateNode.value : 0
-        if (curveRate === 0) {
-          curveRate = frameRate
-          warnings.push('找不到有效的 TimeInfo/Rate，已使用文件 FPS')
-        }
-        const curve = findCurve(root)
-        if (!curve) continue
-        const frames = curve.children.find((child) => child.name === 'Frame')?.value
-        const tags = curve.children.find((child) => child.name === 'Tag')?.value
-        if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
-          throw new Error('ImageCelName FCurve 的 Frame 與 Tag 陣列不完整或長度不符')
         if (rawCount > MAX_FRAMES)
           warnings.push(`原始時間軸有 ${rawCount} 格，已截到 ${MAX_FRAMES} 格`)
         if (frameCount === 0) {
           warnings.push('這條時間軸的長度是 0，略過')
           continue
         }
-        // frame 是相對於整份文件的絕對影格，扣掉 StartFrame 才會對到我們的第 0 格。
-        const keys = frames.map((frame, index) => ({
-          frame: Math.round(((Number(frame) - startFrame) * frameRate) / curveRate),
-          celName: String(tags[index]),
-        }))
+        const actionClips = findAll(root, 'ActionNodeClip')
+        const keysByFrame = new Map<number, CelKey>()
+        let hasCurve = false
+        actionClips.forEach((actionClip, clipIndex) => {
+          const curve = findCurve(actionClip)
+          if (!curve) return
+          hasCurve = true
+          const timeClip = actionClip.children.find((child) => child.name === 'TimeClip')
+          const motionClip = actionClip.children.find((child) => child.name === 'MotionClip')
+          const timeStart = timeClip ? childNumber(timeClip, 'Start') : undefined
+          const timeEnd = timeClip ? childNumber(timeClip, 'End') : undefined
+          const timeRate = timeClip ? childNumber(timeClip, 'Rate') : undefined
+          const motionStart = motionClip ? childNumber(motionClip, 'Start') : undefined
+          const motionEnd = motionClip ? childNumber(motionClip, 'End') : undefined
+          if (
+            timeStart === undefined ||
+            timeEnd === undefined ||
+            timeRate === undefined ||
+            timeRate === 0 ||
+            motionStart === undefined ||
+            motionEnd === undefined
+          ) {
+            warnings.push(`第 ${clipIndex + 1} 個 ActionNodeClip 的時間資料無效，已略過`)
+            return
+          }
+          const frames = curve.children.find((child) => child.name === 'Frame')?.value
+          const tags = curve.children.find((child) => child.name === 'Tag')?.value
+          if (!Array.isArray(frames) || !Array.isArray(tags) || frames.length !== tags.length)
+            throw new Error('ImageCelName FCurve 的 Frame 與 Tag 陣列不完整或長度不符')
+          const zeroMotionRange = motionEnd === motionStart
+          if (zeroMotionRange)
+            warnings.push(
+              `第 ${clipIndex + 1} 個 ActionNodeClip 的 MotionClip 長度是 0，已對映到起始位置`,
+            )
+          frames.forEach((frameValue, index) => {
+            const curveFrame = Number(frameValue)
+            if (!Number.isFinite(curveFrame))
+              throw new Error('ImageCelName FCurve 含有非數字 Frame')
+            const time = zeroMotionRange
+              ? timeStart
+              : timeStart +
+                ((curveFrame - motionStart) * (timeEnd - timeStart)) / (motionEnd - motionStart)
+            // TimeClip 的結尾不含在 clip 內；被修剪掉的 key 不屬於超出文件時間軸。
+            if (time < timeStart || time >= timeEnd) return
+            const frame = Math.round((time * frameRate) / timeRate) - startFrame
+            // 依 ActionNodeClip 順序寫入 Map，讓後面的 clip 在撞格時覆蓋前面的 key。
+            keysByFrame.set(frame, { frame, celName: String(tags[index]) })
+          })
+        })
+        if (!hasCurve) continue
+        const keys = [...keysByFrame.values()].sort((a, b) => a.frame - b.frame)
         const outOfRange = keys.filter((key) => key.frame < 0 || key.frame >= frameCount).length
         if (outOfRange)
           warnings.push(`有 ${outOfRange} 個關鍵影格落在 1–${frameCount} 格之外，已忽略`)
