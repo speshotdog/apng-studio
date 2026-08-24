@@ -3,6 +3,7 @@ import type { ClipSummary, LayerNode } from '../../preload/api.js'
 import type { ExportTarget } from '../../codec/line.js'
 import type {
   EditorDocument,
+  PackCellIndex,
   PackImportCell,
   ProjectMeta,
   SourceAsset,
@@ -128,6 +129,7 @@ export interface State {
   addSource: (asset: SourceAsset, summary: ClipSummary) => void
   setActiveSource: (sourceId: string) => void
   switchDocument: (documentId: string) => void
+  replacePackCell: (index: PackCellIndex, cell: PackImportCell) => void
   removeSource: (sourceId: string) => void
   sourceOf: (sourceId: string | null) => SourceAsset | undefined
   /** 來源檔被搬走時換一個路徑，但保留 id，所有影格的引用都不用動。 */
@@ -530,6 +532,36 @@ export const useStore = create<State>((set, get) => ({
       activeDocumentId: documentId,
       ...documentWorkingPatch(state, target),
     })
+  },
+  replacePackCell: (index, cell) => {
+    let state = get()
+    const replaced = state.packCells.find((candidate) => candidate.index === index)
+    const replacedDocumentId = replaced?.documentId
+    if (replacedDocumentId && state.activeDocumentId === replacedDocumentId) {
+      const fallbackId =
+        state.standaloneDocumentId !== replacedDocumentId &&
+        state.documents[state.standaloneDocumentId]
+          ? state.standaloneDocumentId
+          : Object.keys(state.documents).find((id) => id !== replacedDocumentId)
+      if (!fallbackId) throw new Error('找不到可切換的保留文件')
+      state.switchDocument(fallbackId)
+      state = get()
+    }
+    const documents = { ...state.documents }
+    if (replacedDocumentId) delete documents[replacedDocumentId]
+    set(
+      semanticChange(
+        state,
+        {
+          documents,
+          packCells: [
+            ...state.packCells.filter((candidate) => candidate.index !== index),
+            { ...cell, index },
+          ],
+        },
+        false,
+      ),
+    )
   },
   removeSource: (sourceId) => {
     const state = get()

@@ -124,11 +124,22 @@ assert.deepEqual(
   Object.keys(migrated.editorDocuments),
   'v2 round-trip 的 documentId 必須穩定',
 )
+const savedAgain = JSON.stringify(loaded)
+const loadedAgain = normalizeProjectBlob(JSON.parse(savedAgain) as unknown, createId)
+assert.deepEqual(loadedAgain, loaded, 'v2 blob 連續 save→load→save 必須 deep-equal')
+assert.deepEqual(
+  Object.keys(loadedAgain.editorDocuments),
+  Object.keys(migrated.editorDocuments),
+  '連續兩次 round-trip 仍不得重建 documentId',
+)
 
 // v0.1 可能只有頂層 slots，素材路徑仍放在 ProjectMeta；也必須能升級。
 const v01 = normalizeProjectBlob(
   {
     slots: [{ layerId: 9 }],
+    zoom: 1.75,
+    offsetX: 8,
+    offsetY: -20,
     visibility: [[9, true]],
     fps: 10,
     playCount: 1,
@@ -147,5 +158,9 @@ const v01Document = v01.editorDocuments[v01.standaloneDocumentId]!
 assert.equal(v01.sources.length, 1)
 assert.equal(v01Document.tracks[0]!.slots[0]!.sourceId, v01.sources[0]!.id)
 assert.equal(v01Document.visibility[0]![0], `${v01.sources[0]!.id}:9`)
+assert.equal(v01Document.tracks[0]!.zoom, 1.75)
+assert.equal(v01Document.tracks[0]!.offsetX, 8)
+assert.equal(v01Document.tracks[0]!.offsetY, -20)
+assert.equal(v01Document.tracks.length, 1, '無 tracks 的 v0.1 格式必須建立單一 v2 軌道')
 
 console.log('Migration verification passed')

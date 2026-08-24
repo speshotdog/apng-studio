@@ -8,6 +8,8 @@ let mainWindow: BrowserWindow | null = null
 /** renderer 隨時回報有沒有未存檔的變更，關視窗前才問得出正確的問題。 */
 let hasUnsaved = false
 let allowClose = false
+let closePromptOpen = false
+let closeSaveFailed = false
 function send(command: MenuCommand): void {
   mainWindow?.webContents.send('menu:command', command)
 }
@@ -15,6 +17,10 @@ function argument(name: string): string | undefined {
   return process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3)
 }
 async function createWindow(): Promise<void> {
+  hasUnsaved = false
+  allowClose = false
+  closePromptOpen = false
+  closeSaveFailed = false
   const smokeClip = argument('smoke-clip')
   const smokeOutput = argument('smoke-output')
   mainWindow = new BrowserWindow({
@@ -62,24 +68,42 @@ async function createWindow(): Promise<void> {
     if (!target || allowClose || !hasUnsaved) return
     // 只用 beforeUnload 擋的話視窗會「按了沒反應」，使用者根本不知道發生什麼事。
     event.preventDefault()
+    if (closePromptOpen) return
+    closePromptOpen = true
     void dialog
       .showMessageBox(target, {
         type: 'warning',
-        buttons: ['儲存後關閉', '不儲存直接關閉', '取消'],
+        buttons: closeSaveFailed
+          ? ['再次儲存', '放棄變更直接關閉', '取消']
+          : ['儲存後關閉', '不儲存直接關閉', '取消'],
         defaultId: 0,
         cancelId: 2,
-        message: '有未儲存的變更',
-        detail: '要先存回目前的專案再關閉嗎？',
+        message: closeSaveFailed ? '剛才的存檔失敗，變更尚未儲存' : '有未儲存的變更',
+        detail: closeSaveFailed
+          ? '可以再次儲存，或放棄變更直接關閉。'
+          : '要先存回目前的專案再關閉嗎？',
       })
       .then(async ({ response }) => {
         if (response === 2) return
         if (response === 0) {
-          await target.webContents
+          const saved = await target.webContents
             .executeJavaScript('window.__saveBeforeClose && window.__saveBeforeClose()')
-            .catch((error: unknown) => console.warn(`關閉前存檔失敗：${String(error)}`))
+            .then((value: unknown) => value === true)
+            .catch((error: unknown) => {
+              console.warn(`關閉前存檔失敗：${String(error)}`)
+              return false
+            })
+          if (!saved) {
+            closeSaveFailed = true
+            return
+          }
         }
+        closeSaveFailed = false
         allowClose = true
         target.close()
+      })
+      .finally(() => {
+        closePromptOpen = false
       })
   })
   mainWindow.on('closed', () => {

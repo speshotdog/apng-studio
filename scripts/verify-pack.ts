@@ -5,6 +5,7 @@ import {
   isDocumentCellStale,
 } from '../src/renderer/packDocument.js'
 import { newTrack, runtimeDocument, useStore } from '../src/renderer/state/store.js'
+import { SaveCoordinator } from '../src/renderer/saveCoordinator.js'
 
 const editorDocument = (name: string, fps: number): EditorDocument => ({
   tracks: [{ ...newTrack(name, 2), id: name }],
@@ -177,5 +178,139 @@ const limited = createPackDocumentRefreshService({
 })
 await Promise.all([limited.refresh('a'), limited.refresh('b'), limited.refresh('a')])
 assert.equal(maxActive, 2)
+
+// PNG 覆蓋文件格後，舊 document 與它的 undo/redo 歷史都要一起消失。
+useStore.getState().commit()
+assert.equal(useStore.getState().past.length, 1)
+useStore.getState().replacePackCell(1, {
+  index: 1,
+  sourcePath: 'replacement.png',
+  pngBase64: 'replacement',
+  mime: 'image/png',
+  width: 320,
+  height: 270,
+  byteLength: 11,
+  frameCount: 1,
+})
+const replaced = useStore.getState()
+assert.equal(replaced.activeDocumentId, 'b')
+assert.equal(replaced.documents.a, undefined, '被覆蓋的 documentId 不得留在 editorDocuments')
+assert.equal(replaced.past.length, 0, '切離被覆蓋文件後不得保留它的 undo 歷史')
+assert.equal(replaced.future.length, 0, '切離被覆蓋文件後不得保留它的 redo 歷史')
+assert.equal(replaced.packCells.find((cell) => cell.index === 1)?.documentId, undefined)
+const ownedDocumentIds = new Set([
+  replaced.standaloneDocumentId,
+  ...replaced.packCells.flatMap((cell) => (cell.documentId ? [cell.documentId] : [])),
+])
+assert(
+  Object.keys(replaced.documents).every((documentId) => ownedDocumentIds.has(documentId)),
+  '覆蓋後不得留下沒有格子或 standalone 歸屬的孤兒文件',
+)
+
+// SaveCoordinator：存檔途中繼續編輯，完成後只能推進到請求時的 revision。
+const coordinatorState = {
+  projectId: 'save-project' as string | null,
+  contentRevision: 0,
+  projectRevision: 1,
+  savedRevision: 0,
+}
+const committedRevisions: number[] = []
+const coordinator = new SaveCoordinator<string>({
+  state: () => ({ ...coordinatorState }),
+  commit(token) {
+    coordinatorState.savedRevision = Math.max(coordinatorState.savedRevision, token.projectRevision)
+    committedRevisions.push(coordinatorState.savedRevision)
+  },
+})
+let releaseSave!: () => void
+let saveStarted!: () => void
+const didStartSave = new Promise<void>((resolve) => {
+  saveStarted = resolve
+})
+const saving = coordinator.save(async () => {
+  saveStarted()
+  await new Promise<void>((resolve) => {
+    releaseSave = resolve
+  })
+  return 'revision-1'
+})
+await didStartSave
+coordinatorState.contentRevision += 1
+coordinatorState.projectRevision = 2
+releaseSave()
+assert.equal((await saving).status, 'completed')
+assert.equal(coordinatorState.savedRevision, 1)
+assert.equal(coordinatorState.contentRevision, 1)
+assert.notEqual(
+  coordinatorState.projectRevision,
+  coordinatorState.savedRevision,
+  '存檔期間再編輯後必須維持 dirty',
+)
+
+// 正式存檔排在舊 autosave 前面時，autosave 執行前重查 dirty 並直接略過。
+coordinatorState.projectRevision = 3
+let releaseThirdSave!: () => void
+let thirdSaveStarted!: () => void
+const didStartThirdSave = new Promise<void>((resolve) => {
+  thirdSaveStarted = resolve
+})
+const thirdSave = coordinator.save(async () => {
+  thirdSaveStarted()
+  await new Promise<void>((resolve) => {
+    releaseThirdSave = resolve
+  })
+  return 'revision-3'
+})
+await didStartThirdSave
+let staleAutosaveRan = false
+const staleAutosave = coordinator.autosave(async () => {
+  staleAutosaveRan = true
+})
+releaseThirdSave()
+await Promise.all([thirdSave, staleAutosave])
+assert.equal(staleAutosaveRan, false, '較舊 autosave 不得在正式存檔後重建')
+assert.equal(coordinatorState.savedRevision, 3)
+
+// autosave 與正式 save 同時要求時仍只允許一個 operation 執行，revision 單調前進。
+coordinatorState.projectRevision = 4
+let activeSaves = 0
+let peakSaves = 0
+const order: string[] = []
+let releaseAutosave!: () => void
+let autosaveStarted!: () => void
+const didStartAutosave = new Promise<void>((resolve) => {
+  autosaveStarted = resolve
+})
+const autosaving = coordinator.autosave(async () => {
+  activeSaves += 1
+  peakSaves = Math.max(peakSaves, activeSaves)
+  order.push('autosave:start')
+  autosaveStarted()
+  await new Promise<void>((resolve) => {
+    releaseAutosave = resolve
+  })
+  order.push('autosave:end')
+  activeSaves -= 1
+})
+await didStartAutosave
+const fourthSave = coordinator.save(async () => {
+  activeSaves += 1
+  peakSaves = Math.max(peakSaves, activeSaves)
+  order.push('save:start')
+  activeSaves -= 1
+  return 'revision-4'
+})
+releaseAutosave()
+await Promise.all([autosaving, fourthSave])
+assert.equal(peakSaves, 1)
+assert.deepEqual(order, ['autosave:start', 'autosave:end', 'save:start'])
+assert.deepEqual(committedRevisions, [1, 3, 4])
+assert.equal(
+  committedRevisions.every(
+    (revision, index) => index === 0 || revision >= committedRevisions[index - 1]!,
+  ),
+  true,
+  'savedRevision 不得回退',
+)
 
 console.log('Pack document verification passed')

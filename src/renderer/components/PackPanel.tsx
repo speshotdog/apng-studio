@@ -111,19 +111,7 @@ export function PackPanel(): React.JSX.Element {
         filePath ? { filePath } : { bytes: new Uint8Array(await file.arrayBuffer()) },
       )
       const current = useStore.getState()
-      const documentId = current.packCells.find((cell) => cell.index === index)?.documentId
-      if (documentId && current.activeDocumentId === documentId)
-        current.switchDocument(current.standaloneDocumentId)
-      const afterSwitch = useStore.getState()
-      const documents = { ...afterSwitch.documents }
-      if (documentId) delete documents[documentId]
-      afterSwitch.set({
-        documents,
-        packCells: [
-          ...afterSwitch.packCells.filter((cell) => cell.index !== index),
-          { index, sourcePath: filePath ?? '', ...encoded },
-        ],
-      })
+      current.replacePackCell(index, { index, sourcePath: filePath ?? '', ...encoded })
       state.toast(
         'success',
         `已放入 ${typeof index === 'number' ? String(index).padStart(2, '0') : index}：${file.name}`,

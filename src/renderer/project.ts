@@ -4,9 +4,34 @@ import { askConfirm, askText } from './prompt.js'
 import { captureEditorDocuments } from './snapshot.js'
 import { runtimeDocument, useStore } from './state/store.js'
 import { refreshActiveDocumentCellIfStale } from './packDocument.js'
+import { SaveCoordinator } from './saveCoordinator.js'
 
 /** 自動存檔間隔。夠短到當機不會痛，又不會一直在寫磁碟。 */
 export const AUTOSAVE_INTERVAL_MS = 30_000
+
+const saveCoordinator = new SaveCoordinator<ProjectMeta>({
+  state() {
+    const state = useStore.getState()
+    return {
+      projectId: state.project?.id ?? null,
+      projectRevision: state.projectRevision,
+      savedRevision: state.savedRevision,
+    }
+  },
+  commit(token, meta) {
+    const state = useStore.getState()
+    if (state.project?.id !== token.projectId || state.savedRevision >= token.projectRevision)
+      return
+    const savedRevision = token.projectRevision
+    useStore.setState({
+      project: meta,
+      savedRevision,
+      dirty: state.projectRevision !== savedRevision,
+    })
+  },
+})
+
+const autosaveFailures = new Map<string, number>()
 
 export function captureBlob(): ProjectBlob {
   const state = useStore.getState()
@@ -153,24 +178,41 @@ export async function applyBlob(blob: ProjectBlob): Promise<void> {
 export async function saveCurrentProject(): Promise<boolean> {
   const state = useStore.getState()
   if (!state.project) return false
-  const savingId = state.project.id
-  const savingRevision = state.projectRevision
   try {
-    await refreshActiveDocumentCellIfStale()
-    const meta = await window.api.saveProject(savingId, captureBlob(), thumbnail())
-    // 存檔期間使用者可能已經切到別的專案；慢一步回來的結果不可以蓋掉現在這一份。
-    if (useStore.getState().project?.id !== savingId) return true
-    const current = useStore.getState()
-    useStore.setState({
-      project: meta,
-      savedRevision: savingRevision,
-      dirty: current.projectRevision !== savingRevision,
+    const result = await saveCoordinator.save(async (token) => {
+      await refreshActiveDocumentCellIfStale()
+      if (useStore.getState().project?.id !== token.projectId) throw new Error('存檔期間已切換專案')
+      return window.api.saveProject(token.projectId, captureBlob(), thumbnail())
     })
-    state.toast('success', `已儲存「${meta.name}」`)
+    if (result.status === 'skipped') return false
+    if (useStore.getState().project?.id === result.value.id)
+      state.toast('success', `已儲存「${result.value.name}」`)
     return true
   } catch (error) {
     state.toast('error', `儲存失敗：${error instanceof Error ? error.message : String(error)}`)
     return false
+  }
+}
+
+/** 自動存檔也走正式存檔的同一條專案佇列，但不推進 savedRevision。 */
+export async function autosaveCurrentProject(): Promise<void> {
+  const requested = useStore.getState()
+  const projectId = requested.project?.id
+  if (!projectId || !requested.dirty) return
+  try {
+    const result = await saveCoordinator.autosave(async (token) => {
+      await refreshActiveDocumentCellIfStale()
+      if (useStore.getState().project?.id !== token.projectId) return
+      await window.api.autosaveProject(token.projectId, captureBlob())
+    })
+    if (result.status === 'completed') autosaveFailures.delete(projectId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn(`自動存檔失敗：${message}`)
+    const failures = (autosaveFailures.get(projectId) ?? 0) + 1
+    autosaveFailures.set(projectId, failures)
+    if (failures === 3 && useStore.getState().project?.id === projectId)
+      useStore.getState().toast('error', `自動存檔已連續失敗 3 次：${message}`)
   }
 }
 
