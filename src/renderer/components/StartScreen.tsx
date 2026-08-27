@@ -4,7 +4,7 @@ import { createProjectFrom, openProject } from '../project.js'
 import { askConfirm, askText } from '../prompt.js'
 import { useStore } from '../state/store.js'
 import { DraftBrowser } from './DraftBrowser.js'
-import iconUrl from '../../../assets/icon.png'
+import mascotUrl from '../../../assets/home-mascot.gif'
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString('zh-TW', {
@@ -53,7 +53,9 @@ export function StartScreen(props: { openSettings: () => void }): React.JSX.Elem
     <main className="start-screen">
       <header>
         <div className="start-brand">
-          <img src={iconUrl} alt="" />
+          <div className="start-mascot">
+            <img src={mascotUrl} alt="" />
+          </div>
           <div>
             <h1>APNG Studio</h1>
             <p>選一個專案繼續，或從來源檔開一個新的</p>

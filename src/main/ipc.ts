@@ -452,6 +452,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       throw new Error('只允許開啟 GIPHY 網址')
     return shell.openExternal(parsed.toString())
   })
+  ipcMain.handle('shell:openPath', async (_event, filePath: string): Promise<string> => {
+    try {
+      if (!(await stat(filePath)).isFile()) return '找不到原檔，請先用「連結」重新指向'
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
+      if (code === 'ENOENT' || code === 'ENOTDIR') return '找不到原檔，請先用「連結」重新指向'
+      return `無法檢查原檔：${error instanceof Error ? error.message : String(error)}`
+    }
+    return shell.openPath(filePath)
+  })
   ipcMain.handle('project:list', () => listProjects())
   ipcMain.handle('project:read', (_event, id: string) => readProject(id))
   ipcMain.handle('project:create', (_event, input: Parameters<typeof createProject>[0]) =>

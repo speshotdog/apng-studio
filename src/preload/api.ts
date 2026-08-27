@@ -159,6 +159,7 @@ export interface Api {
   setProgressExpanded(expanded: boolean): Promise<void>
   uploadGiphy(payload: { gifBytes: Uint8Array; tags: string }): Promise<GiphyUploadResult>
   openExternal(url: string): Promise<void>
+  openPath(filePath: string): Promise<string>
   showFrameContextMenu(targetCount: number): Promise<FrameContextAction | null>
   setDirty(dirty: boolean): void
   onMenuCommand(callback: (command: MenuCommand) => void): () => void

@@ -91,6 +91,20 @@ export function SourcePanel({ onAdd }: { onAdd: () => void }): React.JSX.Element
     }
   }
 
+  const openSource = async (sourceId: string): Promise<void> => {
+    const source = sources.find((item) => item.id === sourceId)
+    if (!source) return
+    try {
+      const error = await window.api.openPath(source.path)
+      if (error) state.toast('error', error)
+    } catch (error) {
+      state.toast(
+        'error',
+        `開啟原檔失敗：${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
   return (
     <section className="panel sources">
       <header>
@@ -120,6 +134,9 @@ export function SourcePanel({ onAdd }: { onAdd: () => void }): React.JSX.Element
                 </small>
               </button>
               <span className="source-actions">
+                <button title="用原本的繪圖軟體開啟原檔" onClick={() => void openSource(source.id)}>
+                  開啟原檔
+                </button>
                 <button title="重新連結到另一個檔案" onClick={() => void relink(source.id)}>
                   連結
                 </button>

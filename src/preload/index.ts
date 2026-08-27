@@ -41,6 +41,7 @@ const api: Api = {
   setProgressExpanded: (expanded) => ipcRenderer.invoke('settings:setProgressExpanded', expanded),
   uploadGiphy: (payload) => ipcRenderer.invoke('giphy:upload', payload),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
   showFrameContextMenu: (targetCount) =>
     ipcRenderer.invoke('timeline:frameContextMenu', targetCount),
   setDirty: (dirty) => ipcRenderer.send('window:dirty', dirty),
